@@ -1,20 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0f0c29">
+      <stop offset="0%" stop-color="#ff6b6b">
         <animate attributeName="stop-color" 
-                 values="#0f0c29;#1a1a2e;#16213e;#0f3460;#533483;#0f0c29" 
-                 dur="10s" repeatCount="indefinite" />
+                 values="#ff6b6b;#feca57;#48dbfb;#1dd1a1;#a29bfe;#fd79a8;#ff6b6b" 
+                 dur="8s" repeatCount="indefinite" />
       </stop>
-      <stop offset="50%" stop-color="#302b63">
+      <stop offset="50%" stop-color="#feca57">
         <animate attributeName="stop-color" 
-                 values="#302b63;#16213e;#0f3460;#533483;#e94560;#302b63" 
-                 dur="10s" repeatCount="indefinite" />
+                 values="#feca57;#48dbfb;#1dd1a1;#a29bfe;#fd79a8;#ff6b6b;#feca57" 
+                 dur="8s" repeatCount="indefinite" />
       </stop>
-      <stop offset="100%" stop-color="#24243e">
+      <stop offset="100%" stop-color="#48dbfb">
         <animate attributeName="stop-color" 
-                 values="#24243e;#0f3460;#533483;#e94560;#1a1a2e;#24243e" 
-                 dur="10s" repeatCount="indefinite" />
+                 values="#48dbfb;#1dd1a1;#a29bfe;#fd79a8;#ff6b6b;#feca57;#48dbfb" 
+                 dur="8s" repeatCount="indefinite" />
       </stop>
     </linearGradient>
   </defs>
