@@ -8,11 +8,27 @@ declare const process: {
 };
 
 function deploymentMetadataPlugin(): Plugin {
+  const vercelProductionOrigin = process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : "";
+  const vercelDeploymentOrigin = process.env.VERCEL_URL
+    ? `https://${process.env.VERCEL_URL}`
+    : "";
   const origin = (
     process.env.SITE_URL ||
     process.env.URL ||
     process.env.DEPLOY_PRIME_URL ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "") ||
+    (process.env.VERCEL_ENV === "production" ? vercelProductionOrigin : "") ||
+    vercelDeploymentOrigin ||
+    process.env.CF_PAGES_URL ||
+    ""
+  ).replace(/\/+$/, "");
+  const imageOrigin = (
+    process.env.SITE_URL ||
+    process.env.URL ||
+    process.env.DEPLOY_PRIME_URL ||
+    vercelProductionOrigin ||
+    origin ||
     process.env.CF_PAGES_URL ||
     ""
   ).replace(/\/+$/, "");
@@ -24,7 +40,7 @@ function deploymentMetadataPlugin(): Plugin {
       if (!origin) return html;
 
       const rootUrl = `${origin}/`;
-      const imageUrl = `${origin}/images/og-preview.png`;
+      const imageUrl = `${imageOrigin}/images/og-preview.png`;
 
       return html
         .replace(
