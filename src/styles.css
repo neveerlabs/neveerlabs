@@ -593,52 +593,127 @@ a.footer-link:hover {
   pointer-events: none;
 }
 
-.text-shimmer {
-  background-image: linear-gradient(
-    90deg,
-    #2563eb 0%,
-    #7c3aed 20%,
-    #059669 40%,
-    #d97706 60%,
-    #0284c7 80%,
-    #2563eb 100%
-  );
-  background-size: 300% auto;
+.home-aurora-text {
+  position: relative;
+  width: fit-content;
+}
+
+.home-aurora-base {
+  display: block;
+  background: linear-gradient(90deg, #0e9fbd, #9333ea 52%, #2563eb);
   background-clip: text;
   color: transparent;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: text-shimmer 4s linear infinite;
 }
 
-.id-card-banner-sheen {
-  background-image: linear-gradient(
-    112deg,
-    transparent 37%,
-    rgb(255 255 255 / 0.12) 44%,
-    rgb(255 255 255 / 0.76) 50%,
-    rgb(255 255 255 / 0.12) 56%,
-    transparent 63%
-  );
-  background-size: 220% 100%;
-  animation: banner-sheen 5s ease-in-out infinite;
+.home-aurora-overlay {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(ellipse at 18% 45%, rgb(14 159 189 / 0.92), transparent 42%),
+    radial-gradient(ellipse at 78% 35%, rgb(147 51 234 / 0.88), transparent 44%),
+    radial-gradient(ellipse at 55% 90%, rgb(37 99 235 / 0.9), transparent 40%),
+    linear-gradient(90deg, #0e9fbd, #9333ea 52%, #2563eb);
+  background-size: 180% 180%, 180% 180%, 200% 200%, 100% 100%;
+  background-clip: text;
+  color: transparent;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  pointer-events: none;
+  animation: home-aurora-flow 8s ease-in-out infinite;
 }
 
-@keyframes text-shimmer {
-  0% {
-    background-position: 0% 50%;
-  }
+.id-card-cover {
+  isolation: isolate;
+  overflow: hidden;
+  background: linear-gradient(135deg, #0b0912, #100c1b 55%, #08070d);
+}
+
+.id-card-dot-field {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.id-card-dot {
+  fill: #a855f7;
+  opacity: 0.9;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: id-card-dot-wave 4.8s linear infinite;
+}
+
+.id-card-cover .id-card-dot {
+  mix-blend-mode: screen;
+}
+
+@keyframes home-aurora-flow {
+  0%,
   100% {
-    background-position: 300% 50%;
+    background-position: 0% 50%, 100% 20%, 50% 100%, 20% 0%, 0 0;
+  }
+  25% {
+    background-position: 35% 100%, 70% 10%, 100% 30%, 65% 74%, 0 0;
+  }
+  50% {
+    background-position: 100% 50%, 0% 80%, 40% 0%, 10% 100%, 0 0;
+  }
+  75% {
+    background-position: 60% 0%, 100% 100%, 0% 60%, 85% 10%, 0 0;
   }
 }
 
-@keyframes banner-sheen {
-  from {
-    background-position: 220% center;
+@keyframes id-card-dot-wave {
+  0%,
+  50%,
+  100% {
+    transform: translateY(0);
   }
-  to {
-    background-position: -120% center;
+  6.25% {
+    transform: translateY(-2.7px);
+  }
+  12.5% {
+    transform: translateY(-4.9px);
+  }
+  18.75% {
+    transform: translateY(-6.5px);
+  }
+  25% {
+    transform: translateY(-7px);
+  }
+  31.25% {
+    transform: translateY(-6.5px);
+  }
+  37.5% {
+    transform: translateY(-4.9px);
+  }
+  43.75% {
+    transform: translateY(-2.7px);
+  }
+  56.25% {
+    transform: translateY(2.7px);
+  }
+  62.5% {
+    transform: translateY(4.9px);
+  }
+  68.75% {
+    transform: translateY(6.5px);
+  }
+  75% {
+    transform: translateY(7px);
+  }
+  81.25% {
+    transform: translateY(6.5px);
+  }
+  87.5% {
+    transform: translateY(4.9px);
+  }
+  93.75% {
+    transform: translateY(2.7px);
   }
 }
 
@@ -657,8 +732,8 @@ a.footer-link:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .tech-marquee-track,
-  .text-shimmer,
-  .id-card-banner-sheen {
+  .home-aurora-overlay,
+  .id-card-dot {
     animation-play-state: paused;
   }
 }

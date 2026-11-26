@@ -1239,8 +1239,18 @@ export function AdminPage() {
   const availableProjects = visibleProjects
     .map((row) => row.record as ProjectRow)
     .filter((project) => project.id);
+  const normalizedSearch = search.trim().toLocaleLowerCase();
+  const matchesRecord = (table: TableName, row: VisibleRow) => {
+    if (!normalizedSearch) return true;
+    const recordSection = table === "projects" ? "projects" : "changelogs";
+    const searchableText = [
+      getDisplayName(table, row.record),
+      getRowSubtitle(recordSection, row.record, availableProjects),
+    ].join(" ").toLocaleLowerCase();
+    return searchableText.includes(normalizedSearch);
+  };
   const matchingRows = rows.filter((row) =>
-    JSON.stringify(row.record).toLowerCase().includes(search.toLowerCase()),
+    matchesRecord(section === "projects" ? "projects" : "project_changelogs", row),
   );
   const sidebarRowsFor = (table: TableName) => {
     const tableRows = table === "projects"
@@ -1250,9 +1260,7 @@ export function AdminPage() {
             (row) => (row.record as ProjectChangelog | ChangelogDraft).project_id === activeProjectId,
           )
         : visibleChangelogs;
-    return tableRows.filter((row) =>
-      JSON.stringify(row.record).toLowerCase().includes(search.toLowerCase()),
-    );
+    return tableRows.filter((row) => matchesRecord(table, row));
   };
   const stagedCount = staged.size;
 

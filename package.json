@@ -1,7 +1,7 @@
 {
   "name": "neverlabs",
   "description": "neverlabs 一 personal brand",
-  "version": "1.1.5+3",
+  "version": "1.1.5+32",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",

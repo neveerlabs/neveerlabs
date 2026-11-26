@@ -273,7 +273,7 @@ const pageTitles: Record<Language, Record<Page, string>> = {
 type AboutPageCopy = {
   headline: string;
   narrative: string[];
-  principles: { number: string; title: string; description: string }[];
+  principles: { title: string; description: string }[];
   focusLabel: string;
   focusAreas: { title: string; description: string }[];
 };
@@ -288,19 +288,16 @@ const aboutCopy: Record<Language, AboutPageCopy> = {
     ],
     principles: [
       {
-        number: "01",
         title: "Explore First",
         description:
           "Experiment openly with technologies, systems, and ideas before settling into rigid patterns.",
       },
       {
-        number: "02",
         title: "Build Useful Things",
         description:
           "Focus on practical utility, clean architecture, and software that solves real problems.",
       },
       {
-        number: "03",
         title: "Keep It Calm",
         description:
           "Design interfaces and tools that feel quiet, fast, and intentional—free from visual noise.",
@@ -333,17 +330,14 @@ const aboutCopy: Record<Language, AboutPageCopy> = {
     ],
     principles: [
       {
-        number: "01",
         title: "先探索，再定义",
         description: "先开放地尝试新技术、系统与想法，再决定是否将其沉淀为固定模式。",
       },
       {
-        number: "02",
         title: "构建真正有用的作品",
         description: "重视实际价值与清晰架构，专注于解决真实问题的软件。",
       },
       {
-        number: "03",
         title: "保持克制与清晰",
         description: "打造安静、快速且有明确目的的界面与工具，避免多余的视觉干扰。",
       },
@@ -611,30 +605,33 @@ function LanyardCard({ language }: { language: Language }) {
         </svg>
 
         <div className="relative h-[430px] w-full overflow-hidden rounded-[24px] border border-[#e6e5e3] bg-white shadow-[0_20px_50px_rgba(34,36,43,0.10)]">
-          <div
-            className="relative h-[118px]"
-            style={{
-              background:
-                "linear-gradient(135deg, #7c3aed 0%, #8b5cf6 38%, #e4e4e7 75%, #18181b 100%)",
-            }}
-          >
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 opacity-80"
-              style={{
-                backgroundImage:
-                  "radial-gradient(rgba(255,255,255,0.24) 1px, transparent 1px)",
-                backgroundSize: "12px 12px",
-              }}
-            />
-            <div
-              aria-hidden="true"
-              className="id-card-banner-sheen pointer-events-none absolute inset-0"
-            />
-            <span
-              aria-hidden="true"
-              className="absolute left-1/2 top-1.5 z-20 h-1.5 w-9 -translate-x-1/2 rounded-full bg-[#18181b]"
-            />
+          <div className="relative h-[118px]">
+            <div aria-hidden="true" className="id-card-cover absolute inset-0">
+              <svg
+                className="id-card-dot-field"
+                preserveAspectRatio="none"
+                viewBox="0 0 340 118"
+              >
+                {Array.from({ length: 8 }, (_, row) =>
+                  Array.from({ length: 25 }, (_, column) => (
+                    <circle
+                      className="id-card-dot"
+                      cx={6 + column * 13.7}
+                      cy={5 + row * 15.4}
+                      key={`${row}-${column}`}
+                      r="1.7"
+                      style={{
+                        animationDelay: `${column * 0.16}s`,
+                      }}
+                    />
+                  )),
+                )}
+              </svg>
+              <span
+                aria-hidden="true"
+                className="absolute left-1/2 top-1.5 z-20 h-1.5 w-9 -translate-x-1/2 rounded-full bg-[#18181b]"
+              />
+            </div>
             <img
               alt="Muhammad Syalman Al Farizi"
               className="absolute -bottom-[38px] left-1/2 z-20 h-[76px] w-[76px] shrink-0 -translate-x-1/2 rounded-full border-[3px] border-white object-cover shadow-md"
@@ -695,6 +692,17 @@ function LanyardCard({ language }: { language: Language }) {
   );
 }
 
+function AuroraName({ text }: { text: string }) {
+  return (
+    <span className="home-aurora-text block w-fit select-none">
+      <span className="home-aurora-base">{text}</span>
+      <span aria-hidden="true" className="home-aurora-overlay">
+        {text}
+      </span>
+    </span>
+  );
+}
+
 function HomePage({
   language,
   onNavigate,
@@ -720,12 +728,8 @@ function HomePage({
                 id="home-title"
               >
                 <span className="block text-[#18181b]">{text.heroGreeting}</span>
-                <span className="text-shimmer block select-none">
-                  {text.heroNameFirst}
-                </span>
-                <span className="text-shimmer block select-none">
-                  {text.heroNameLast}
-                </span>
+                <AuroraName text={text.heroNameFirst} />
+                <AuroraName text={text.heroNameLast} />
               </h1>
               <p className="mt-5 max-w-[520px] text-[15px] leading-[1.68] text-[#6d6e73] md:text-[17px]">
                 {text.intro}
@@ -862,11 +866,8 @@ function AboutPage({ language }: { language: Language }) {
           {text.principles.map((principle) => (
             <article
               className="border-b border-[#e6e5e3] pb-6 last:border-b-0 last:pb-0 md:border-b-0 md:pb-0"
-              key={principle.number}
+              key={principle.title}
             >
-              <p className="mb-3 text-xs font-medium text-[#4774ed]">
-                {principle.number}
-              </p>
               <h3 className="mb-2 text-lg font-semibold text-[#22242b]">
                 {principle.title}
               </h3>

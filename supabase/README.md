@@ -2,24 +2,11 @@
 
 Dokumen ini menjelaskan cara menyiapkan Supabase, mengisi proyek melalui Table Editor, mengunggah media, dan menghubungkan API ke situs.
 
-## 1. Siapkan atau perbarui database
+## 1. Siapkan database
 
-Pilih satu jalur sesuai kondisi database:
+Untuk **project Supabase baru**, jalankan `schema.sql`, lalu `commit_manager.sql` di SQL Editor. `schema.sql` menyiapkan tabel `projects` dan `project_changelogs`, bucket publik `project-media`, serta aturan akses dan pemicu penghapusan media. Ekstensi `pg_net` dan schema `vault` juga disiapkan. `commit_manager.sql` memasang fungsi commit atomik yang hanya dapat dipanggil dengan role `service_role`.
 
-- **Database baru:** jalankan `schema.sql` satu kali untuk membuat skema terkini, lalu jalankan `commit_manager.sql`. Jangan jalankan file migrasi setelah `schema.sql`; definisi tabel dan perubahan migrasinya sudah termasuk di sana.
-- **Database lama, lewat SQL Editor:** jalankan migrasi `20261125162200_add_changelog_title.sql`, lalu `20261126010000_simplify_contributors_and_remove_changelog_framework.sql`. Setelahnya, jalankan ulang `commit_manager.sql`.
-- **Database lama, lewat Supabase CLI:** terapkan semua file di `migrations/` dalam urutan timestamp, lalu jalankan ulang `commit_manager.sql`.
-
-`schema.sql` adalah setup lengkap untuk database baru: membuat tabel `projects` dan `project_changelogs`, bucket publik `project-media`, serta aturan akses dan pemicu penghapusan media. Ekstensi `pg_net` dan schema `vault` juga disiapkan. `commit_manager.sql` memasang fungsi commit atomik yang hanya dapat dipanggil dengan role `service_role`.
-
-### Riwayat migrasi
-
-| File | Peran |
-| --- | --- |
-| [`20261125162200_add_changelog_title.sql`](./migrations/20261125162200_add_changelog_title.sql) | Menambahkan judul changelog; judul lama diisi dari versi. |
-| [`20261126010000_simplify_contributors_and_remove_changelog_framework.sql`](./migrations/20261126010000_simplify_contributors_and_remove_changelog_framework.sql) | Memastikan kolom kontributor tersedia, merapikan data kontributor menjadi nama dan URL, lalu menghapus framework changelog. |
-
-Migrasi contributor perantara dihapus karena perubahan yang sama sudah tercakup dalam migrasi final dan belum tercatat pada riwayat migrasi remote. File migrasi bertimestamp yang tersisa adalah riwayat database; setelah diterapkan/tercatat, jangan menghapus, mengganti nama, atau mengubahnya.
+Untuk **database yang sudah digunakan**, jangan jalankan file setup ini secara otomatis. File migrasi historis tidak lagi disertakan di repo; database lama yang belum memakai skema terkini perlu diperbarui secara terencana, bukan dengan menjalankan `schema.sql` secara langsung.
 
 ## 2. Tambahkan proyek melalui Table Editor
 

@@ -5,6 +5,7 @@ import {
   FolderOpen,
   RotateCcw,
   Search,
+  X,
 } from "lucide-react";
 import type { Language, Project, ProjectPlatform } from "../types/projects";
 import { MediaThumbnail } from "../components/MediaThumbnail";
@@ -23,22 +24,28 @@ const labels = {
     title: "Projects",
     subtitle: "A collection of ideas shaped into useful digital work.",
     all: "All",
+    searchPlaceholder: "Search projects",
+    searchLabel: "Search projects",
+    clearSearch: "Clear project search",
     reset: "Reset filters",
     emptyTitle: "No projects yet",
     emptyDescription: "New projects will appear here once they are added.",
     noResultsTitle: "No matching projects",
-    noResultsDescription: "Try another filter or reset your selections.",
+    noResultsDescription: "Try another search or filter, or reset your selections.",
     untitled: "Neverlabs project",
   },
   zh: {
     title: "项目",
     subtitle: "将想法逐步转化为实用数字作品。",
     all: "全部",
+    searchPlaceholder: "搜索项目",
+    searchLabel: "搜索项目",
+    clearSearch: "清除项目搜索",
     reset: "重置筛选",
     emptyTitle: "暂无项目",
     emptyDescription: "添加新项目后，它们会显示在这里。",
     noResultsTitle: "没有找到匹配的项目",
-    noResultsDescription: "试试其他筛选条件，或重置当前选择。",
+    noResultsDescription: "尝试其他搜索或筛选条件，或重置当前选择。",
     untitled: "Neverlabs 项目",
   },
 } as const;
@@ -100,14 +107,14 @@ function ProjectCard({
   project: Project;
   language: Language;
   onNavigate: (name: string) => void;
-  onFilter: (kind: "platform" | "framework" | "keyword", value: string) => void;
+  onFilter: (kind: "platform" | "keyword", value: string) => void;
 }) {
   const href = `/${language}/projects/${encodeURIComponent(project.name)}`;
   const description = projectDescription(project, language);
   const descriptionPreview = plainDescriptionPreview(description, project.name);
   const tags = [
     ...(project.platform ? [{ kind: "platform" as const, label: platformLabel(project.platform, language) }] : []),
-    ...(project.framework ?? []).slice(0, 2).map((label) => ({ kind: "framework" as const, label })),
+    ...(project.keyword ?? []).slice(0, 2).map((label) => ({ kind: "keyword" as const, label })),
   ];
 
   return (
@@ -196,35 +203,37 @@ export function ProjectsPage({
       ? params.get("platform")
       : "all") as ProjectPlatform | "all",
   );
-  const [framework, setFramework] = useState(params.get("framework") ?? "");
   const [keyword, setKeyword] = useState(params.get("keyword") ?? "");
-
-  const frameworks = useMemo(
-    () => [...new Set(projects.flatMap((project) => project.framework ?? []))].sort(),
-    [projects],
-  );
+  const [searchTerm, setSearchTerm] = useState(params.get("q") ?? "");
   const keywords = useMemo(
     () => [...new Set(projects.flatMap((project) => project.keyword ?? []))].sort(),
     [projects],
   );
+  const normalizedSearch = searchTerm.trim().toLocaleLowerCase(language);
   const filteredProjects = projects.filter(
     (project) =>
       (platform === "all" || project.platform === platform) &&
-      (!framework || project.framework?.includes(framework)) &&
-      (!keyword || project.keyword?.includes(keyword)),
+      (!keyword || project.keyword?.includes(keyword)) &&
+      (!normalizedSearch ||
+        project.name.toLocaleLowerCase(language).includes(normalizedSearch)),
   );
-  const hasFilters = platform !== "all" || Boolean(framework) || Boolean(keyword);
+  const hasFilters = platform !== "all" || Boolean(keyword) || Boolean(normalizedSearch);
 
   const applyTagFilter = (
-    kind: "platform" | "framework" | "keyword",
+    kind: "platform" | "keyword",
     value: string,
   ) => {
     if (kind === "platform") {
       setPlatform(value as ProjectPlatform);
       return;
     }
-    if (kind === "framework") setFramework(value);
-    if (kind === "keyword") setKeyword(value);
+    setKeyword(value);
+  };
+
+  const resetFilters = () => {
+    setPlatform("all");
+    setKeyword("");
+    setSearchTerm("");
   };
 
   return (
@@ -258,23 +267,32 @@ export function ProjectsPage({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap lg:justify-end lg:gap-2">
-          <div className="relative w-[148px]">
-            <select
-              aria-label={language === "en" ? "Filter by framework" : "按框架筛选"}
-              className="h-10 w-full appearance-none rounded-full border border-[#e5e4e1] bg-white pl-3.5 pr-9 text-sm text-[#53545a] transition-colors hover:border-[#b8b7b4] focus:border-[#a9a8a4] focus:outline-none focus:ring-2 focus:ring-[#1a1918]/10 lg:h-8 lg:pl-3 lg:text-xs"
-              onChange={(event) => setFramework(event.target.value)}
-              value={framework}
-            >
-              <option value="">{language === "en" ? "All frameworks" : "所有框架"}</option>
-              {frameworks.map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
-            <ChevronDown
+          <div className="relative min-w-[180px] flex-1 lg:w-[220px] lg:flex-none">
+            <Search
               aria-hidden="true"
-              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#77787d]"
-              size={14}
+              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#8b8c91] lg:left-3"
+              size={15}
             />
+            <input
+              aria-label={text.searchLabel}
+              className="h-10 w-full rounded-full border border-[#e5e4e1] bg-white pl-10 pr-9 text-sm text-[#53545a] placeholder:text-[#9a9ba0] transition-colors hover:border-[#b8b7b4] focus:border-[#a9a8a4] focus:outline-none focus:ring-2 focus:ring-[#1a1918]/10 lg:h-8 lg:pl-8 lg:pr-8 lg:text-xs"
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder={text.searchPlaceholder}
+              type="text"
+              value={searchTerm}
+            />
+            {searchTerm && (
+              <button
+                aria-label={text.clearSearch}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#85868b] transition-colors hover:text-[#1a1918] lg:right-2"
+                onClick={() => setSearchTerm("")}
+                type="button"
+              >
+                <X aria-hidden="true" size={14} />
+              </button>
+            )}
           </div>
-          <div className="relative w-[148px]">
+          <div className="relative w-[148px] lg:w-[128px]">
             <select
               aria-label={language === "en" ? "Filter by keyword" : "按关键词筛选"}
               className="h-10 w-full appearance-none rounded-full border border-[#e5e4e1] bg-white pl-3.5 pr-9 text-sm text-[#53545a] transition-colors hover:border-[#b8b7b4] focus:border-[#a9a8a4] focus:outline-none focus:ring-2 focus:ring-[#1a1918]/10 lg:h-8 lg:pl-3 lg:text-xs"
@@ -290,20 +308,6 @@ export function ProjectsPage({
               size={14}
             />
           </div>
-          {hasFilters && (
-            <button
-              className="inline-flex h-10 items-center gap-1.5 rounded-full border border-[#e5e4e1] bg-white px-3 text-sm text-[#6d6e73] transition-colors hover:border-[#b8b7b4] hover:text-[#1a1918] lg:h-8 lg:text-xs"
-              onClick={() => {
-                setPlatform("all");
-                setFramework("");
-                setKeyword("");
-              }}
-              type="button"
-            >
-              <RotateCcw size={14} />
-              {text.reset}
-            </button>
-          )}
         </div>
       </div>
 
@@ -342,11 +346,7 @@ export function ProjectsPage({
           {hasFilters && (
             <button
               className="mt-5 inline-flex h-9 items-center gap-2 rounded-full border border-[#e5e4e1] bg-white px-3.5 text-sm font-medium text-[#55565b] transition-colors hover:border-[#b8b7b4] hover:bg-[#f7f6f4] hover:text-[#1a1918]"
-              onClick={() => {
-                setPlatform("all");
-                setFramework("");
-                setKeyword("");
-              }}
+              onClick={resetFilters}
               type="button"
             >
               <RotateCcw aria-hidden="true" size={14} />

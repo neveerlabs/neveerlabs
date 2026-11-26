@@ -256,15 +256,19 @@ function ProjectTag({
   value: string;
   variant?: "default" | "github";
 }) {
+  const className =
+    variant === "github"
+      ? compactProjectTagClass
+      : "rounded-full border border-[#e6e5e3] bg-[#faf9f8] px-2.5 py-1 text-xs text-[#6d6e73] transition-colors hover:border-[#b8b7b4] hover:text-[#1a1918]";
+  if (kind === "framework") {
+    return <span className={className}>{value}</span>;
+  }
+
   const params = new URLSearchParams();
-  params.set(kind, value);
+  params.set("keyword", value);
   return (
     <a
-      className={
-        variant === "github"
-          ? compactProjectTagClass
-          : "rounded-full border border-[#e6e5e3] bg-[#faf9f8] px-2.5 py-1 text-xs text-[#6d6e73] transition-colors hover:border-[#b8b7b4] hover:text-[#1a1918]"
-      }
+      className={className}
       href={`/${language}/projects?${params.toString()}`}
     >
       {value}
