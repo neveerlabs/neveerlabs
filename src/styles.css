@@ -26,11 +26,11 @@ body {
   min-height: 100vh;
   margin: 0;
   background: #faf9f8;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 html {
-  overflow-x: hidden;
+  overflow-x: clip;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -47,9 +47,11 @@ body::-webkit-scrollbar {
   height: 0;
 }
 
-button,
-a {
-  font: inherit;
+@layer base {
+  button,
+  a {
+    font: inherit;
+  }
 }
 
 a {
@@ -678,6 +680,15 @@ a.footer-link:hover {
 .home-social-links {
   margin-top: 24px;
   gap: 20px;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 @media (max-width: 650px) {

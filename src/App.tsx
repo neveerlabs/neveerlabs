@@ -14,10 +14,18 @@ import {
   Linkedin,
   Mail,
 } from "lucide-react";
+import type { Project } from "./types/projects";
+import { AdminPage } from "./pages/AdminPage";
+import { ProjectsPage } from "./pages/ProjectsPage";
+import { ProjectDetailPage } from "./pages/ProjectDetailPage";
 
 type Language = "en" | "zh";
-type Page = "home" | "about" | "projects" | "blog";
-type PageNavigationHandler = (event: MouseEvent<HTMLAnchorElement>, page: Page) => void;
+type Page = "home" | "about" | "projects" | "project-detail" | "blog";
+type PageNavigationHandler = (
+  event: MouseEvent<HTMLAnchorElement>,
+  page: Page,
+  projectName?: string,
+) => void;
 
 const slideDirections = [
   {
@@ -62,16 +70,36 @@ function getLanguageFromPathname(pathname: string): Language | null {
 }
 
 function getPageFromPathname(pathname: string): Page {
-  const pageSegment = pathname.split("/").filter(Boolean)[1];
-  return pageSegment === "about" ||
-    pageSegment === "projects" ||
-    pageSegment === "blog"
+  const segments = pathname.split("/").filter(Boolean);
+  const pageSegment = segments[1];
+  if (pageSegment === "projects" && segments.length > 2) {
+    return "project-detail";
+  }
+  return pageSegment === "about" || pageSegment === "projects" || pageSegment === "blog"
     ? pageSegment
     : "home";
 }
 
-function getLocalizedPath(language: Language, page: Page): string {
-  return page === "home" ? `/${language}/` : `/${language}/${page}`;
+function getProjectNameFromPathname(pathname: string): string | null {
+  const slug = pathname.split("/").filter(Boolean)[2];
+  if (!slug) return null;
+  try {
+    return decodeURIComponent(slug);
+  } catch {
+    return slug;
+  }
+}
+
+function getLocalizedPath(
+  language: Language,
+  page: Page,
+  projectName?: string | null,
+): string {
+  if (page === "home") return `/${language}/`;
+  if (page === "project-detail") {
+    return `/${language}/projects/${encodeURIComponent(projectName ?? "")}`;
+  }
+  return `/${language}/${page}`;
 }
 
 const copy = {
@@ -230,12 +258,14 @@ const pageTitles: Record<Language, Record<Page, string>> = {
     home: "neverlabs — personal brand",
     about: "About — neverlabs",
     projects: "Projects — neverlabs",
+    "project-detail": "Project — neverlabs",
     blog: "Blog — neverlabs",
   },
   zh: {
     home: "neverlabs — 个人品牌",
     about: "关于 — neverlabs",
     projects: "项目 — neverlabs",
+    "project-detail": "项目 — neverlabs",
     blog: "博客 — neverlabs",
   },
 };
@@ -884,10 +914,22 @@ function PageSections({
   language,
   page,
   onNavigate,
+  project,
+  projects,
+  projectsLoading,
+  projectsError,
+  onProjectNavigate,
+  onProjectsBack,
 }: {
   language: Language;
   page: Page;
   onNavigate: PageNavigationHandler;
+  project: Project | null;
+  projects: Project[];
+  projectsLoading: boolean;
+  projectsError: string | null;
+  onProjectNavigate: (name: string) => void;
+  onProjectsBack: () => void;
 }) {
   const sectionClass =
     "mx-auto flex min-h-[calc(100vh-88px)] w-full max-w-4xl -translate-y-8 flex-col items-center justify-center px-5 py-10 text-center md:min-h-[calc(100vh-95px)] md:-translate-y-10 md:px-8 md:py-24";
@@ -898,6 +940,44 @@ function PageSections({
 
   if (page === "home") {
     return <HomePage language={language} onNavigate={onNavigate} />;
+  }
+
+  if (page === "projects") {
+    if (projectsError) {
+      return (
+        <div className="mx-auto w-full max-w-[1120px] px-4 py-16 text-sm text-red-700 md:px-8">
+          {language === "en"
+            ? "Projects could not be loaded. Please try again later."
+            : "项目加载失败，请稍后重试。"}
+        </div>
+      );
+    }
+    if (projectsLoading) {
+      return (
+        <div aria-live="polite" className="mx-auto min-h-[50vh] w-full max-w-5xl px-5 py-20 text-sm text-[#76777c]">
+          {language === "en" ? "Loading projects…" : "正在加载项目…"}
+        </div>
+      );
+    }
+    return (
+      <ProjectsPage
+        language={language}
+        onNavigate={onProjectNavigate}
+        projects={projects}
+      />
+    );
+  }
+
+  if (page === "project-detail") {
+    return (
+      <ProjectDetailPage
+        error={projectsError}
+        language={language}
+        loading={projectsLoading}
+        onBack={onProjectsBack}
+        project={project}
+      />
+    );
   }
 
   const text = pageCopy[language][page];
@@ -919,13 +999,6 @@ function PageSections({
             {line}
           </p>
         ))}
-        {page === "projects" && (
-          <ul className="mt-8 flex max-w-3xl flex-wrap justify-center gap-x-7 gap-y-3 text-sm text-[#6d6e73] md:text-base">
-            {copy[language].projectItems.map((name) => (
-              <li key={name}>{name}</li>
-            ))}
-          </ul>
-        )}
         {text.emptyState && (
           <p className="mt-8 rounded-full border border-[#e6e5e3] bg-white px-5 py-2 text-sm text-[#76777c]">
             {text.emptyState}
@@ -936,31 +1009,61 @@ function PageSections({
   );
 }
 
-export default function App() {
+function PortfolioApp() {
   const [language, setLanguage] = useState<Language>(
     () => getLanguageFromPathname(window.location.pathname) ?? "en",
   );
   const [currentPage, setCurrentPage] = useState<Page>(
     () => getPageFromPathname(window.location.pathname),
   );
+  const [projectName, setProjectName] = useState<string | null>(
+    () => getProjectNameFromPathname(window.location.pathname),
+  );
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const lastSlideDirection = useRef<number | null>(null);
   const text = copy[language];
   const isChinese = language === "zh";
 
   useEffect(() => {
-    const title = pageTitles[language][currentPage];
+    const title =
+      currentPage === "project-detail" && selectedProject
+        ? `${selectedProject.name} — ${language === "en" ? "Projects" : "项目"} — neverlabs`
+        : pageTitles[language][currentPage];
     const description =
-      currentPage === "home"
-        ? language === "en"
-          ? "Muhammad Syalman Al Farizi — exploring ideas and engineering software, web & mobile applications, and practical tools through Neverlabs."
-          : homeCopy.zh.intro
-        : currentPage === "about"
-          ? aboutCopy[language].narrative.join(" ")
-          : pageCopy[language][currentPage].description.join(" ");
-    const canonicalPath = getLocalizedPath(language, currentPage);
+      currentPage === "project-detail" && selectedProject
+        ? selectedProject.description?.[language] ||
+          selectedProject.description?.en ||
+          ""
+        : currentPage === "home"
+          ? language === "en"
+            ? "Muhammad Syalman Al Farizi — exploring ideas and engineering software, web & mobile applications, and practical tools through Neverlabs."
+            : homeCopy.zh.intro
+          : currentPage === "about"
+            ? aboutCopy[language].narrative.join(" ")
+            : currentPage === "projects" || currentPage === "project-detail"
+              ? language === "en"
+                ? "Explore projects and software experiments by Neverlabs."
+                : "探索 Neverlabs 的项目与软件实验。"
+              : pageCopy[language].blog.description.join(" ");
+    const canonicalPath = getLocalizedPath(
+      language,
+      currentPage,
+      projectName,
+    );
     const canonicalUrl = `${window.location.origin}${canonicalPath}`;
-    const imageUrl = `${window.location.origin}/images/og-preview.png`;
+    const projectImage =
+      currentPage === "project-detail" &&
+      selectedProject?.primary_media &&
+      !/\.(mp4|webm|mov|m4v)(?:[?#]|$)/i.test(selectedProject.primary_media)
+        ? selectedProject.primary_media
+        : null;
+    const imageUrl = projectImage
+      ? new URL(projectImage, window.location.origin).href
+      : `${window.location.origin}/images/og-preview.png`;
 
     document.title = title;
     document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
@@ -991,7 +1094,52 @@ export default function App() {
       }
       meta.content = content;
     }
-  }, [language, currentPage]);
+  }, [language, currentPage, projectName, selectedProject]);
+
+  useEffect(() => {
+    if (currentPage !== "projects" && currentPage !== "project-detail") {
+      setProjectsLoading(false);
+      setProjectsError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const endpoint =
+      currentPage === "project-detail"
+        ? `/api/projects?name=${encodeURIComponent(projectName ?? "")}`
+        : "/api/projects";
+
+    setProjectsLoading(true);
+    setProjectsError(null);
+    if (currentPage === "project-detail") setSelectedProject(null);
+    void fetch(endpoint, { signal: controller.signal })
+      .then(async (response) => {
+        if (response.status === 404 && currentPage === "project-detail") {
+          setSelectedProject(null);
+          setProjectsError("not-found");
+          return;
+        }
+        if (!response.ok) {
+          throw new Error(`Projects API returned ${response.status}.`);
+        }
+        const data = (await response.json()) as Project | Project[];
+        if (currentPage === "project-detail") {
+          setSelectedProject(data as Project);
+        } else {
+          setProjects(data as Project[]);
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        console.error("Unable to load project data:", error);
+        setProjectsError("load-failed");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setProjectsLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [currentPage, projectName]);
 
   useEffect(() => {
     const syncLanguageFromUrl = () => {
@@ -1001,8 +1149,13 @@ export default function App() {
 
       setLanguage(nextLanguage);
       setCurrentPage(nextPage);
+      setProjectName(getProjectNameFromPathname(window.location.pathname));
 
-      const canonicalPath = getLocalizedPath(nextLanguage, nextPage);
+      const canonicalPath = getLocalizedPath(
+        nextLanguage,
+        nextPage,
+        getProjectNameFromPathname(window.location.pathname),
+      );
       if (window.location.pathname !== canonicalPath) {
         window.history.replaceState(
           null,
@@ -1010,6 +1163,7 @@ export default function App() {
           `${canonicalPath}${window.location.search}${window.location.hash}`,
         );
       }
+
     };
 
     syncLanguageFromUrl();
@@ -1038,20 +1192,33 @@ export default function App() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  const beginNavigation = (nextLanguage: Language, nextPage: Page) => {
-    if (nextLanguage === language && nextPage === currentPage) {
+  const beginNavigation = (
+    nextLanguage: Language,
+    nextPage: Page,
+    nextProjectName: string | null = null,
+  ) => {
+    if (
+      nextLanguage === language &&
+      nextPage === currentPage &&
+      nextProjectName === projectName
+    ) {
       setIsHeaderVisible(true);
       window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
 
     const updatePage = () => {
-      const path = `${getLocalizedPath(nextLanguage, nextPage)}${window.location.search}`;
+      const path = `${getLocalizedPath(
+        nextLanguage,
+        nextPage,
+        nextProjectName,
+      )}${window.location.search}`;
       window.history.pushState(null, "", path);
 
       flushSync(() => {
         setLanguage(nextLanguage);
         setCurrentPage(nextPage);
+        setProjectName(nextProjectName);
         setIsHeaderVisible(true);
       });
 
@@ -1096,9 +1263,10 @@ export default function App() {
     document.startViewTransition(updatePage);
   };
 
-  const handleNavigationClick = (
+  const handleNavigationClick: PageNavigationHandler = (
     event: MouseEvent<HTMLAnchorElement>,
     page: Page,
+    nextProjectName,
   ) => {
     if (
       event.button !== 0 ||
@@ -1111,7 +1279,7 @@ export default function App() {
     }
 
     event.preventDefault();
-    beginNavigation(language, page);
+    beginNavigation(language, page, nextProjectName ?? null);
   };
 
   const homeUrl = getLocalizedPath(language, "home");
@@ -1146,7 +1314,11 @@ export default function App() {
           </a>
           <a
             href={projectsUrl}
-            aria-current={currentPage === "projects" ? "page" : undefined}
+            aria-current={
+              currentPage === "projects" || currentPage === "project-detail"
+                ? "page"
+                : undefined
+            }
             onClick={(event) => handleNavigationClick(event, "projects")}
           >
             {text.projects}
@@ -1168,7 +1340,7 @@ export default function App() {
             <button
               className={isChinese ? "language-option active" : "language-option"}
               type="button"
-              onClick={() => beginNavigation("zh", currentPage)}
+              onClick={() => beginNavigation("zh", currentPage, projectName)}
               aria-pressed={isChinese}
             >
               中文
@@ -1176,7 +1348,7 @@ export default function App() {
             <button
               className={!isChinese ? "language-option active" : "language-option"}
               type="button"
-              onClick={() => beginNavigation("en", currentPage)}
+              onClick={() => beginNavigation("en", currentPage, projectName)}
               aria-pressed={!isChinese}
             >
               EN
@@ -1189,6 +1361,14 @@ export default function App() {
         language={language}
         page={currentPage}
         onNavigate={handleNavigationClick}
+        project={selectedProject}
+        projects={projects}
+        projectsLoading={projectsLoading}
+        projectsError={projectsError}
+        onProjectNavigate={(name) =>
+          beginNavigation(language, "project-detail", name)
+        }
+        onProjectsBack={() => beginNavigation(language, "projects")}
       />
 
       <div className="section-rule home-footer-rule" />
@@ -1250,4 +1430,10 @@ export default function App() {
       </footer>
     </main>
   );
+}
+
+export default function App() {
+  return /^\/admin\/?$/.test(window.location.pathname)
+    ? <AdminPage />
+    : <PortfolioApp />;
 }
