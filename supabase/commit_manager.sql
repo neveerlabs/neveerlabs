@@ -11,8 +11,8 @@ declare
   record_data jsonb;
   target_id uuid;
   target_project_id uuid;
+  contributor_id uuid;
   description_value jsonb;
-  contributors_value jsonb;
   media_value jsonb;
   framework_value text[];
   keyword_value text[];
@@ -35,10 +35,17 @@ begin
     from jsonb_array_elements(p_changes) with ordinality as item(value, sequence_no)
     order by
       case
+        when item.value ->> 'table' = 'contributors'
+          and item.value ->> 'operation' <> 'delete' then 0
         when item.value ->> 'table' = 'projects'
+          and item.value ->> 'operation' <> 'delete' then 1
+        when item.value ->> 'table' = 'project_changelogs'
+          and item.value ->> 'operation' <> 'delete' then 2
+        when item.value ->> 'table' = 'project_changelogs'
           and item.value ->> 'operation' = 'delete' then 3
-        when item.value ->> 'table' = 'projects' then 1
-        else 2
+        when item.value ->> 'table' = 'projects'
+          and item.value ->> 'operation' = 'delete' then 4
+        else 5
       end,
       item.sequence_no
   loop
@@ -50,7 +57,7 @@ begin
     operation_name := change ->> 'operation';
 
     if table_name is null
-      or table_name not in ('projects', 'project_changelogs') then
+      or table_name not in ('projects', 'project_changelogs', 'contributors') then
       raise exception 'Unsupported table: %.', table_name;
     end if;
 
@@ -67,8 +74,10 @@ begin
 
       if table_name = 'projects' then
         delete from public.projects where id = target_id;
-      else
+      elsif table_name = 'project_changelogs' then
         delete from public.project_changelogs where id = target_id;
+      else
+        delete from public.contributors where id = target_id;
       end if;
 
       if not found then
@@ -93,6 +102,44 @@ begin
       raise exception 'A row ID is required for update.';
     elsif operation_name = 'insert' then
       target_id := coalesce(target_id, gen_random_uuid());
+    end if;
+
+    if table_name = 'contributors' then
+      if jsonb_typeof(record_data -> 'name') is distinct from 'string'
+        or nullif(btrim(record_data ->> 'name'), '') is null then
+        raise exception 'A contributor name is required.';
+      end if;
+      if record_data ? 'url'
+        and record_data -> 'url' <> 'null'::jsonb
+        and jsonb_typeof(record_data -> 'url') is distinct from 'string' then
+        raise exception 'A contributor URL must be a string or null.';
+      end if;
+
+      if operation_name = 'insert' then
+        insert into public.contributors (id, name, url)
+        values (
+          target_id,
+          btrim(record_data ->> 'name'),
+          nullif(btrim(record_data ->> 'url'), '')
+        );
+      else
+        update public.contributors
+        set
+          name = btrim(record_data ->> 'name'),
+          url = nullif(btrim(record_data ->> 'url'), '')
+        where id = target_id;
+
+        if not found then
+          raise exception 'No contributor found with ID %.', target_id;
+        end if;
+      end if;
+
+      applied := applied || jsonb_build_array(jsonb_build_object(
+        'table', table_name,
+        'operation', operation_name,
+        'id', target_id
+      ));
+      continue;
     end if;
 
     if jsonb_typeof(record_data -> 'media') not in ('array', 'null')
@@ -121,22 +168,16 @@ begin
     end if;
     if jsonb_typeof(record_data -> 'contributors') not in ('array', 'null')
       and record_data ? 'contributors' then
-      raise exception 'The contributors field must be a JSON array or null.';
+      raise exception 'Contributor IDs must be a JSON array or null.';
     end if;
     if jsonb_typeof(record_data -> 'contributors') = 'array'
       and exists (
         select 1
         from jsonb_array_elements(record_data -> 'contributors') as item(value)
-        where jsonb_typeof(item.value) <> 'object'
-          or jsonb_typeof(item.value -> 'name') is distinct from 'string'
-          or nullif(btrim(item.value ->> 'name'), '') is null
-          or (
-            item.value ? 'url'
-            and item.value -> 'url' <> 'null'::jsonb
-            and jsonb_typeof(item.value -> 'url') is distinct from 'string'
-          )
+        where jsonb_typeof(item.value) <> 'string'
+          or (item.value #>> '{}') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       ) then
-      raise exception 'Each contributor must have a name and an optional URL.';
+      raise exception 'Each contributor must be a valid contributor ID.';
     end if;
 
     description_value := coalesce(
@@ -147,26 +188,6 @@ begin
       nullif(record_data -> 'media', 'null'::jsonb),
       '[]'::jsonb
     );
-    if record_data -> 'contributors' is null
-      or record_data -> 'contributors' = 'null'::jsonb then
-      contributors_value := null;
-    else
-      contributors_value := (
-        select coalesce(
-          jsonb_agg(
-            jsonb_strip_nulls(jsonb_build_object(
-              'name', btrim(item.value ->> 'name'),
-              'url', nullif(btrim(item.value ->> 'url'), '')
-            ))
-            order by item.sequence_no
-          ),
-          '[]'::jsonb
-        )
-        from jsonb_array_elements(record_data -> 'contributors')
-          with ordinality as item(value, sequence_no)
-      );
-    end if;
-
     if table_name = 'projects' then
       if jsonb_typeof(record_data -> 'framework') not in ('array', 'null')
         and record_data ? 'framework' then
@@ -216,7 +237,7 @@ begin
       if operation_name = 'insert' then
         insert into public.projects (
           id, name, visibility, platform, description, framework, keyword,
-          contributors, primary_media, media, url, created_at, completed_at,
+          primary_media, media, url, created_at, completed_at,
           sort_order
         )
         values (
@@ -227,7 +248,6 @@ begin
           description_value,
           framework_value,
           keyword_value,
-          contributors_value,
           nullif(record_data ->> 'primary_media', ''),
           media_value,
           nullif(record_data ->> 'url', ''),
@@ -244,7 +264,6 @@ begin
           description = description_value,
           framework = framework_value,
           keyword = keyword_value,
-          contributors = contributors_value,
           primary_media = nullif(record_data ->> 'primary_media', ''),
           media = media_value,
           url = nullif(record_data ->> 'url', ''),
@@ -256,6 +275,19 @@ begin
           raise exception 'No project found with ID %.', target_id;
         end if;
       end if;
+
+      delete from public.project_contributors
+      where project_id = target_id;
+      insert into public.project_contributors (project_id, contributor_id, position)
+      select
+        target_id,
+        item.value::uuid,
+        (item.ordinality - 1)::integer
+      from jsonb_array_elements_text(
+        coalesce(nullif(record_data -> 'contributors', 'null'::jsonb), '[]'::jsonb)
+      ) with ordinality as item(value, ordinality)
+      on conflict (project_id, contributor_id)
+      do update set position = excluded.position;
     else
       target_project_id := nullif(record_data ->> 'project_id', '')::uuid;
       if target_project_id is null then
@@ -273,8 +305,7 @@ begin
 
       if operation_name = 'insert' then
         insert into public.project_changelogs (
-          id, project_id, title, version, release, description, contributors,
-          media, released_at
+          id, project_id, title, version, release, description, media, released_at
         )
         values (
           target_id,
@@ -283,7 +314,6 @@ begin
           btrim(record_data ->> 'version'),
           record_data ->> 'release',
           description_value,
-          contributors_value,
           media_value,
           coalesce(nullif(record_data ->> 'released_at', '')::timestamptz, now())
         );
@@ -295,7 +325,6 @@ begin
           version = btrim(record_data ->> 'version'),
           release = record_data ->> 'release',
           description = description_value,
-          contributors = contributors_value,
           media = media_value,
           released_at = coalesce(
             nullif(record_data ->> 'released_at', '')::timestamptz,
@@ -307,6 +336,19 @@ begin
           raise exception 'No changelog found with ID %.', target_id;
         end if;
       end if;
+
+      delete from public.changelog_contributors
+      where changelog_id = target_id;
+      insert into public.changelog_contributors (changelog_id, contributor_id, position)
+      select
+        target_id,
+        item.value::uuid,
+        (item.ordinality - 1)::integer
+      from jsonb_array_elements_text(
+        coalesce(nullif(record_data -> 'contributors', 'null'::jsonb), '[]'::jsonb)
+      ) with ordinality as item(value, ordinality)
+      on conflict (changelog_id, contributor_id)
+      do update set position = excluded.position;
     end if;
 
     applied := applied || jsonb_build_array(jsonb_build_object(

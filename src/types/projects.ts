@@ -10,6 +10,7 @@ export type ProjectPlatform =
 export type LocalizedText = Record<Language, string>;
 
 export interface ProjectContributor {
+  id: string;
   name: string;
   url?: string | null;
 }
@@ -19,7 +20,7 @@ export interface ProjectChangelog {
   project_id: string;
   title: string;
   version: string;
-  release: "stable" | "latest" | "pre-release";
+  release: "latest" | "pre-release" | "none";
   description: LocalizedText;
   contributors?: ProjectContributor[] | null;
   media: string[];

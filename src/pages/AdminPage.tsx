@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
@@ -17,11 +18,12 @@ import {
   Code2,
   Copy,
   FileImage,
-  FileText,
   Folder,
   FolderKanban,
+  GitCommitHorizontal,
   ImagePlus,
   LoaderCircle,
+  Lock,
   LogOut,
   Pencil,
   Play,
@@ -29,10 +31,12 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import type {
   Language,
+  LocalizedText,
   Project,
   ProjectChangelog,
   ProjectContributor,
@@ -42,18 +46,174 @@ import { MarkdownContent } from "../components/MarkdownContent";
 import { isVideoMedia } from "../components/MediaThumbnail";
 import "./AdminPage.css";
 
-type TableName = "projects" | "project_changelogs";
-type SectionName = "projects" | "changelogs";
+type TableName = "projects" | "project_changelogs" | "contributors";
+type SectionName = "projects" | "changelogs" | "contributors" | "media";
 type Operation = "insert" | "update" | "delete";
 type ProjectRow = Omit<Project, "changelogs">;
 type ProjectDraft = Omit<ProjectRow, "id"> & { id?: string };
 type ChangelogDraft = Omit<ProjectChangelog, "id"> & { id?: string };
-type DraftRecord = ProjectDraft | ChangelogDraft;
+type ContributorDraft = Omit<ProjectContributor, "id"> & { id?: string };
+type ContributorReference = {
+  project: ProjectRow;
+  projectAssigned: boolean;
+  changelogs: ProjectChangelog[];
+};
+type DraftRecord = ProjectDraft | ChangelogDraft | ContributorDraft;
 
 interface VisibleRow {
   key: string;
-  record: ProjectRow | ProjectChangelog | DraftRecord;
+  record: ProjectRow | ProjectChangelog | ProjectContributor | DraftRecord;
   operation?: Operation;
+}
+
+function storageObjectPath(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const pathname = new URL(value).pathname;
+    const prefix = "/storage/v1/object/public/project-media/";
+    const prefixIndex = pathname.indexOf(prefix);
+    if (prefixIndex < 0) return null;
+    return pathname
+      .slice(prefixIndex + prefix.length)
+      .split("/")
+      .map((segment) => decodeURIComponent(segment))
+      .join("/");
+  } catch {
+    return null;
+  }
+}
+
+function storagePathsInText(value: string): Set<string> {
+  const paths = new Set<string>();
+  const urls = value.match(/https?:\/\/[^\s<>"'`)\]]+/g) ?? [];
+  for (const rawUrl of urls) {
+    const path = storageObjectPath(rawUrl.replace(/[.,!?;:]+$/, ""));
+    if (path) paths.add(path);
+  }
+  return paths;
+}
+
+function localizedStoragePaths(value: LocalizedText): Set<string> {
+  return new Set(
+    Object.values(value).flatMap((text) => [...storagePathsInText(text)]),
+  );
+}
+
+function removeStorageReferencesFromText(value: string, targetPath: string): string {
+  const urls = value.match(/https?:\/\/[^\s<>"'`)\]]+/g) ?? [];
+  let next = value;
+  for (const rawUrl of urls) {
+    const url = rawUrl.replace(/[.,!?;:]+$/, "");
+    if (storageObjectPath(url) !== targetPath) continue;
+    const escapedUrl = url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const destination = `(?:<${escapedUrl}>|${escapedUrl})`;
+    const title = `(?:\\s+(?:"[^"]*"|'[^']*'))?`;
+    const referenceLabels: string[] = [];
+    const definition = new RegExp(
+      `^\\s*\\[([^\\]]+)\\]:\\s*${destination}${title}\\s*$`,
+      "gim",
+    );
+    next = next.replace(definition, (_match, label: string) => {
+      referenceLabels.push(label);
+      return "";
+    });
+    if (referenceLabels.length > 0) {
+      const labels = referenceLabels
+        .map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join("|");
+      next = next
+        .replace(new RegExp(`!\\[[^\\]]*\\]\\[(${labels})\\]`, "gi"), "")
+        .replace(new RegExp(`\\[([^\\]]+)\\]\\[(${labels})\\]`, "gi"), "$1")
+        .replace(new RegExp(`!\\[(${labels})\\]`, "gi"), "")
+        .replace(new RegExp(`\\[(${labels})\\]`, "gi"), "$1");
+    }
+    next = next
+      .replace(
+        new RegExp(`<img\\b(?=[^>]*\\bsrc\\s*=\\s*(?:"${escapedUrl}"|'${escapedUrl}'|${escapedUrl}))[^>]*>`, "gi"),
+        "",
+      )
+      .replace(
+        new RegExp(`!\\[[^\\]]*\\]\\(\\s*${destination}${title}\\s*\\)`, "g"),
+        "",
+      )
+      .replace(
+        new RegExp(`\\[([^\\]]+)\\]\\(\\s*${destination}${title}\\s*\\)`, "g"),
+        "$1",
+      )
+      .replace(new RegExp(escapedUrl, "g"), "")
+      .replace(/<\s*>/g, "")
+      .replace(/!?\[\]\(\s*\)/g, "");
+  }
+  return next;
+}
+
+function removeLocalizedStorageReferences(
+  value: LocalizedText,
+  targetPath: string,
+): LocalizedText {
+  return {
+    en: removeStorageReferencesFromText(value.en, targetPath),
+    zh: removeStorageReferencesFromText(value.zh, targetPath),
+  };
+}
+
+function projectAttachedStoragePaths(
+  project: Pick<ProjectRow, "primary_media" | "media">,
+): Set<string> {
+  return new Set([
+    ...[project.primary_media, ...(project.media ?? [])]
+      .map(storageObjectPath)
+      .filter((path): path is string => path !== null),
+  ]);
+}
+
+function projectStoragePaths(
+  project: Pick<ProjectRow, "primary_media" | "media" | "description">,
+): Set<string> {
+  return new Set([
+    ...projectAttachedStoragePaths(project),
+    ...localizedStoragePaths(project.description),
+  ]);
+}
+
+function projectUsesStorageMedia(
+  project: Pick<ProjectRow, "primary_media" | "media" | "description"> & { id?: string },
+  path: string,
+  changelogs: Array<Pick<ProjectChangelog, "project_id" | "description">> = [],
+): boolean {
+  return projectStoragePaths(project).has(path) || (
+    Boolean(project.id) &&
+    changelogs.some(
+      (changelog) =>
+        changelog.project_id === project.id &&
+        localizedStoragePaths(changelog.description).has(path),
+    )
+  );
+}
+
+function allProjectStoragePaths(
+  projects: Array<Pick<ProjectRow, "primary_media" | "media" | "description">>,
+  changelogs: Array<Pick<ProjectChangelog, "description">>,
+): Set<string> {
+  return new Set([
+    ...projects.flatMap((project) => [...projectStoragePaths(project)]),
+    ...changelogs.flatMap((changelog) => [
+      ...localizedStoragePaths(changelog.description),
+    ]),
+  ]);
+}
+
+function removedProjectStoragePaths(
+  beforeProjects: Array<Pick<ProjectRow, "primary_media" | "media" | "description">>,
+  afterProjects: Array<Pick<ProjectRow, "primary_media" | "media" | "description">>,
+  beforeChangelogs: Array<Pick<ProjectChangelog, "description">>,
+  afterChangelogs: Array<Pick<ProjectChangelog, "description">>,
+): Set<string> {
+  const remaining = allProjectStoragePaths(afterProjects, afterChangelogs);
+  return new Set(
+    [...allProjectStoragePaths(beforeProjects, beforeChangelogs)]
+      .filter((path) => !remaining.has(path)),
+  );
 }
 
 type DeleteTarget = { table: TableName; row: VisibleRow };
@@ -97,6 +257,11 @@ interface MediaResponse {
   nextOffset: number | null;
 }
 
+type StorageMediaFile = MediaItem & {
+  type: "file";
+  publicUrl: string;
+};
+
 type AdminRequestOptions = Omit<RequestInit, "body"> & { body?: unknown };
 
 const pendingPrefix = "__neverlabs_pending_upload__:";
@@ -109,9 +274,9 @@ const platforms: ProjectPlatform[] = [
   "other",
 ];
 const releaseValues: ProjectChangelog["release"][] = [
-  "stable",
   "latest",
   "pre-release",
+  "none",
 ];
 
 async function adminRequest<T>(
@@ -161,9 +326,12 @@ function compoundKey(table: TableName, key: string): string {
 
 function getDisplayName(
   table: TableName,
-  record: ProjectRow | ProjectChangelog | DraftRecord,
+  record: ProjectRow | ProjectChangelog | ProjectContributor | DraftRecord,
 ): string {
   if (isProjectTable(table)) return (record as ProjectRow | ProjectDraft).name || "Untitled project";
+  if (table === "contributors") {
+    return (record as ProjectContributor | ContributorDraft).name || "Untitled contributor";
+  }
   const changelog = record as ProjectChangelog | ChangelogDraft;
   return `${changelog.title || "Untitled changelog"} ${changelog.version ? `· ${changelog.version}` : ""}`.trim();
 }
@@ -237,6 +405,12 @@ function changelogDraft(record?: ProjectChangelog): ChangelogDraft {
       };
 }
 
+function contributorDraft(record?: ProjectContributor): ContributorDraft {
+  return record
+    ? { ...record }
+    : { id: crypto.randomUUID(), name: "", url: null };
+}
+
 function stageKey(change: StagedChange): string {
   return compoundKey(change.table, change.key);
 }
@@ -307,21 +481,6 @@ function parseDateTimeInput(value: string): string | null {
   return value ? new Date(value).toISOString() : null;
 }
 
-function parseContributors(
-  value: string,
-  previous: ProjectContributor[] | null | undefined,
-): ProjectContributor[] {
-  const existing = new Map((previous ?? []).map((contributor) => [contributor.name, contributor]));
-  return value
-    .split(",")
-    .map((name) => name.trim())
-    .filter(Boolean)
-    .map((name) => {
-      const contributor = existing.get(name);
-      return contributor?.url ? { name, url: contributor.url } : { name };
-    });
-}
-
 async function copyMediaUrl(value: string): Promise<void> {
   if (!navigator.clipboard?.writeText) {
     throw new Error("Clipboard access is unavailable in this browser.");
@@ -344,6 +503,173 @@ function Field({
       {children}
       {hint && <span className="admin-field-hint">{hint}</span>}
     </label>
+  );
+}
+
+function useDismissOnOutsideClick<T extends HTMLElement>(
+  ref: { current: T | null },
+  open: boolean,
+  onDismiss: () => void,
+) {
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (ref.current && target instanceof Node && !ref.current.contains(target)) {
+        onDismiss();
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onDismiss();
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open, onDismiss, ref]);
+}
+
+function ContributorPicker({
+  selected,
+  options,
+  onChange,
+  onCreate,
+}: {
+  selected: ProjectContributor[];
+  options: ProjectContributor[];
+  onChange: (contributors: ProjectContributor[]) => void;
+  onCreate: (name: string, url: string | null) => ProjectContributor;
+}) {
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [formError, setFormError] = useState("");
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useDismissOnOutsideClick(pickerRef, open, () => setOpen(false));
+
+  const toggle = (contributor: ProjectContributor) => {
+    const alreadySelected = selected.some((item) => item.id === contributor.id);
+    onChange(
+      alreadySelected
+        ? selected.filter((item) => item.id !== contributor.id)
+        : [...selected, contributor],
+    );
+  };
+
+  const createContributor = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const trimmedName = name.trim();
+    const trimmedUrl = url.trim();
+    if (!trimmedName) {
+      setFormError("Contributor name is required.");
+      return;
+    }
+    if (trimmedUrl && !safeHttpUrl(trimmedUrl)) {
+      setFormError("Enter a valid http or https contact URL.");
+      return;
+    }
+    const contributor = onCreate(trimmedName, trimmedUrl || null);
+    if (!selected.some((item) => item.id === contributor.id)) {
+      onChange([...selected, contributor]);
+    }
+    setName("");
+    setUrl("");
+    setFormError("");
+    setCreating(false);
+  };
+
+  return (
+    <div className="admin-field admin-contributor-field">
+      <div className="admin-contributor-picker" ref={pickerRef}>
+        <button
+          aria-controls="admin-contributor-picker-menu"
+          aria-expanded={open}
+          aria-label={`Contributors${selected.length ? `, ${selected.length} selected` : ""}`}
+          className="admin-contributor-picker-trigger"
+          onClick={() => setOpen((value) => !value)}
+          type="button"
+        >
+          <span>Contributors</span>
+          {selected.length > 0 && (
+            <span className="admin-contributor-selected-count">{selected.length} selected</span>
+          )}
+          <ChevronDown size={14} />
+        </button>
+        {open && (
+          <div
+            className="admin-contributor-picker-menu"
+            id="admin-contributor-picker-menu"
+          >
+            <div aria-label="Select contributors" className="admin-contributor-options" role="group">
+              {options.length ? options.map((contributor) => {
+                const isSelected = selected.some((item) => item.id === contributor.id);
+                return (
+                  <label className="admin-contributor-option" key={contributor.id}>
+                    <input
+                      checked={isSelected}
+                      onChange={() => toggle(contributor)}
+                      type="checkbox"
+                    />
+                    <span>{contributor.name}</span>
+                  </label>
+                );
+              }) : (
+                <p className="admin-contributor-empty">No contributors yet.</p>
+              )}
+            </div>
+            {creating ? (
+              <form className="admin-contributor-create" onSubmit={createContributor}>
+                <input
+                  aria-label="New contributor name"
+                  autoFocus
+                  className="admin-input"
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Name"
+                  value={name}
+                />
+                <input
+                  aria-label="New contributor contact URL"
+                  className="admin-input"
+                  onChange={(event) => setUrl(event.target.value)}
+                  placeholder="Contact URL (optional)"
+                  type="url"
+                  value={url}
+                />
+                {formError && <span className="admin-field-error">{formError}</span>}
+                <div>
+                  <button
+                    className="admin-button admin-button-quiet"
+                    onClick={() => {
+                      setCreating(false);
+                      setFormError("");
+                    }}
+                    type="button"
+                  >
+                    Cancel
+                  </button>
+                  <button className="admin-button admin-button-primary" disabled={!name.trim()} type="submit">
+                    Add contributor
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button
+                className="admin-contributor-add-option"
+                onClick={() => setCreating(true)}
+                type="button"
+              >
+                <Plus size={14} /> Add new contributor
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      <span className="admin-field-hint">Select from the shared contributor list.</span>
+    </div>
   );
 }
 
@@ -457,6 +783,17 @@ function MediaListEditor({
   const [urlEditorOpen, setUrlEditorOpen] = useState(false);
   const [removeIndex, setRemoveIndex] = useState<number | null>(null);
   const [copyMessage, setCopyMessage] = useState("");
+  const mediaEditorRef = useRef<HTMLDivElement>(null);
+
+  useDismissOnOutsideClick(
+    mediaEditorRef,
+    urlEditorOpen || removeIndex !== null,
+    () => {
+      setUrlEditorOpen(false);
+      setRemoveIndex(null);
+    },
+  );
+
   const addUrl = () => {
     const rawUrl = urlInput.trim();
     if (!safeHttpUrl(rawUrl)) {
@@ -478,9 +815,13 @@ function MediaListEditor({
   };
 
   return (
-    <Field label={label} hint="Images are uploaded from Storage only when you commit.">
-      <div className="admin-media-editor-grid">
-        {value.map((item, index) => (
+    <Field
+      label={label}
+      hint="Uploads are saved when you commit. Removing a Storage file deletes it after commit only if no other project uses it."
+    >
+      <div className="admin-media-editor-scope" ref={mediaEditorRef}>
+        <div className="admin-media-editor-grid">
+          {value.map((item, index) => (
             <div className="admin-media-card" key={`${item}-${index}`}>
               <MediaPreview pendingUploads={pendingUploads} value={item} />
               <div className="admin-media-card-actions">
@@ -524,56 +865,57 @@ function MediaListEditor({
               )}
             </div>
           ))}
-        <div className="admin-media-empty-slot">
-          <span>Add media</span>
-          <div>
-            <button
-              aria-label="Enter media URL"
-              onClick={() => {
-                setUrlEditorOpen((open) => !open);
-                setCopyMessage("");
+          <div className="admin-media-empty-slot">
+            <span>Add media</span>
+            <div>
+              <button
+                aria-label="Enter media URL"
+                onClick={() => {
+                  setUrlEditorOpen((open) => !open);
+                  setCopyMessage("");
+                }}
+                title="Enter media URL"
+                type="button"
+              >
+                <Pencil size={15} />
+              </button>
+              <button
+                aria-label="Upload or choose media"
+                onClick={browseForMedia}
+                title="Upload or choose media"
+                type="button"
+              >
+                <ImagePlus size={16} />
+              </button>
+            </div>
+          </div>
+        </div>
+        {copyMessage && <span className="admin-field-hint" role="status">{copyMessage}</span>}
+        {urlEditorOpen && (
+          <div className="admin-media-url-entry">
+            <input
+              aria-label={`${label} raw media URL`}
+              autoFocus
+              className="admin-media-url-input"
+              onChange={(event) => setUrlInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addUrl();
+                }
               }}
-              title="Enter media URL"
-              type="button"
-            >
-              <Pencil size={15} />
+              placeholder="https://…/image.png"
+              value={urlInput}
+            />
+            <button aria-label="Add media URL" disabled={!urlInput.trim()} onClick={addUrl} title="Add URL" type="button">
+              <Check size={15} />
             </button>
-            <button
-              aria-label="Upload or choose media"
-              onClick={browseForMedia}
-              title="Upload or choose media"
-              type="button"
-            >
+            <button aria-label="Upload media instead" onClick={browseForMedia} title="Upload media" type="button">
               <ImagePlus size={16} />
             </button>
           </div>
-        </div>
+        )}
       </div>
-      {copyMessage && <span className="admin-field-hint" role="status">{copyMessage}</span>}
-      {urlEditorOpen && (
-        <div className="admin-media-url-entry">
-          <input
-            aria-label={`${label} raw media URL`}
-            autoFocus
-            className="admin-media-url-input"
-            onChange={(event) => setUrlInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                addUrl();
-              }
-            }}
-            placeholder="https://…/image.png"
-            value={urlInput}
-          />
-          <button aria-label="Add media URL" disabled={!urlInput.trim()} onClick={addUrl} title="Add URL" type="button">
-            <Check size={15} />
-          </button>
-          <button aria-label="Upload media instead" onClick={browseForMedia} title="Upload media" type="button">
-            <ImagePlus size={16} />
-          </button>
-        </div>
-      )}
     </Field>
   );
 }
@@ -595,6 +937,17 @@ function SingleMediaEditor({
   const [urlInput, setUrlInput] = useState("");
   const [removeConfirm, setRemoveConfirm] = useState(false);
   const [copyMessage, setCopyMessage] = useState("");
+  const mediaEditorRef = useRef<HTMLDivElement>(null);
+
+  useDismissOnOutsideClick(
+    mediaEditorRef,
+    urlEditorOpen || removeConfirm,
+    () => {
+      setUrlEditorOpen(false);
+      setRemoveConfirm(false);
+    },
+  );
+
   const addUrl = () => {
     const rawUrl = urlInput.trim();
     if (!safeHttpUrl(rawUrl)) {
@@ -615,8 +968,12 @@ function SingleMediaEditor({
   };
 
   return (
-    <Field label={label} hint="Use a raw file URL or select a file from Storage.">
-      <div className="admin-media-single-preview">
+    <Field
+      label={label}
+      hint="Use a raw file URL or select a file from Storage. Removing it deletes the Storage file after commit only if no other project uses it."
+    >
+      <div className="admin-media-single-scope" ref={mediaEditorRef}>
+        <div className="admin-media-single-preview">
         {value ? (
           <div className="admin-media-card">
             <MediaPreview pendingUploads={pendingUploads} value={value} />
@@ -673,32 +1030,33 @@ function SingleMediaEditor({
             </div>
           </div>
         )}
-      </div>
-      {copyMessage && <span className="admin-field-hint" role="status">{copyMessage}</span>}
-      {urlEditorOpen && (
-        <div className="admin-media-url-entry">
-          <input
-            aria-label={`${label} raw media URL`}
-            autoFocus
-            className="admin-media-url-input"
-            onChange={(event) => setUrlInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                addUrl();
-              }
-            }}
-            placeholder="https://…/image.png"
-            value={urlInput}
-          />
-          <button aria-label="Set media URL" disabled={!urlInput.trim()} onClick={addUrl} title="Use URL" type="button">
-            <Check size={15} />
-          </button>
-          <button aria-label="Upload media instead" onClick={browseForMedia} title="Upload media" type="button">
-            <ImagePlus size={16} />
-          </button>
         </div>
-      )}
+        {copyMessage && <span className="admin-field-hint" role="status">{copyMessage}</span>}
+        {urlEditorOpen && (
+          <div className="admin-media-url-entry">
+            <input
+              aria-label={`${label} raw media URL`}
+              autoFocus
+              className="admin-media-url-input"
+              onChange={(event) => setUrlInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  addUrl();
+                }
+              }}
+              placeholder="https://…/image.png"
+              value={urlInput}
+            />
+            <button aria-label="Set media URL" disabled={!urlInput.trim()} onClick={addUrl} title="Use URL" type="button">
+              <Check size={15} />
+            </button>
+            <button aria-label="Upload media instead" onClick={browseForMedia} title="Upload media" type="button">
+              <ImagePlus size={16} />
+            </button>
+          </div>
+        )}
+      </div>
     </Field>
   );
 }
@@ -707,36 +1065,27 @@ function ProjectEditor({
   initial,
   isNew,
   pendingUploads,
+  contributors,
   onChange,
   onBrowseMedia,
+  onCreateContributor,
 }: {
   initial: ProjectDraft;
   isNew: boolean;
   pendingUploads: Map<string, PendingUpload>;
+  contributors: ProjectContributor[];
   onChange: (record: ProjectDraft) => void;
   onBrowseMedia: (onPick: (reference: string) => void) => void;
+  onCreateContributor: (name: string, url: string | null) => ProjectContributor;
 }) {
   const [record, setRecord] = useState<ProjectDraft>(() => structuredClone(initial));
-  const [contributorsText, setContributorsText] = useState(() =>
-    initial.contributors?.map((contributor) => contributor.name).join(", ") ?? "",
-  );
   const update = (patch: Partial<ProjectDraft>) => {
     const next = { ...record, ...patch };
     setRecord(next);
-    onChange({
-      ...next,
-      contributors: parseContributors(contributorsText, initial.contributors),
-    });
+    onChange(next);
   };
   const updateDescription = (language: Language, value: string) =>
     update({ description: { ...record.description, [language]: value } });
-  const updateContributors = (value: string) => {
-    setContributorsText(value);
-    onChange({
-      ...record,
-      contributors: parseContributors(value, initial.contributors),
-    });
-  };
 
   return (
     <div className="admin-editor">
@@ -777,9 +1126,12 @@ function ProjectEditor({
           <Field label="Completed at">
             <input className="admin-input" type="datetime-local" value={formatDateTimeInput(record.completed_at)} onChange={(event) => update({ completed_at: parseDateTimeInput(event.target.value) })} />
           </Field>
-          <Field label="Contributors" hint="Separate names with commas">
-            <input className="admin-input" value={contributorsText} onChange={(event) => updateContributors(event.target.value)} placeholder="neverlabs, Sara" />
-          </Field>
+          <ContributorPicker
+            selected={record.contributors ?? []}
+            options={contributors}
+            onChange={(selected) => update({ contributors: selected })}
+            onCreate={onCreateContributor}
+          />
         </div>
         <Field label="Description">
           <MarkdownEditor value={record.description} onChange={updateDescription} />
@@ -812,38 +1164,25 @@ function ChangelogEditor({
   initial,
   isNew,
   projects,
-  pendingUploads,
+  contributors,
   onChange,
-  onBrowseMedia,
+  onCreateContributor,
 }: {
   initial: ChangelogDraft;
   isNew: boolean;
   projects: ProjectRow[];
-  pendingUploads: Map<string, PendingUpload>;
+  contributors: ProjectContributor[];
   onChange: (record: ChangelogDraft) => void;
-  onBrowseMedia: (onPick: (reference: string) => void) => void;
+  onCreateContributor: (name: string, url: string | null) => ProjectContributor;
 }) {
   const [record, setRecord] = useState<ChangelogDraft>(() => structuredClone(initial));
-  const [contributorsText, setContributorsText] = useState(() =>
-    initial.contributors?.map((contributor) => contributor.name).join(", ") ?? "",
-  );
   const update = (patch: Partial<ChangelogDraft>) => {
     const next = { ...record, ...patch };
     setRecord(next);
-    onChange({
-      ...next,
-      contributors: parseContributors(contributorsText, initial.contributors),
-    });
+    onChange(next);
   };
   const updateDescription = (language: Language, value: string) =>
     update({ description: { ...record.description, [language]: value } });
-  const updateContributors = (value: string) => {
-    setContributorsText(value);
-    onChange({
-      ...record,
-      contributors: parseContributors(value, initial.contributors),
-    });
-  };
 
   return (
     <div className="admin-editor">
@@ -851,10 +1190,7 @@ function ChangelogEditor({
         <h3>{isNew ? "New changelog" : "Release details"}</h3>
         <div className="admin-form-grid">
           <Field label="Project">
-            <select className="admin-input" value={record.project_id} onChange={(event) => update({ project_id: event.target.value })}>
-              <option value="">Choose a project</option>
-              {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-            </select>
+            <span>{projects.find((project) => project.id === record.project_id)?.name ?? "Project unavailable"}</span>
           </Field>
           <Field label="Release status">
             <select className="admin-input" value={record.release} onChange={(event) => update({ release: event.target.value as ProjectChangelog["release"] })}>
@@ -870,26 +1206,105 @@ function ChangelogEditor({
           <Field label="Released at">
             <input className="admin-input" type="datetime-local" value={formatDateTimeInput(record.released_at)} onChange={(event) => update({ released_at: parseDateTimeInput(event.target.value) ?? record.released_at })} />
           </Field>
-          <Field label="Contributors" hint="Separate names with commas">
-            <input className="admin-input" value={contributorsText} onChange={(event) => updateContributors(event.target.value)} placeholder="neverlabs, Sara" />
-          </Field>
+          <ContributorPicker
+            selected={record.contributors ?? []}
+            options={contributors}
+            onChange={(selected) => update({ contributors: selected })}
+            onCreate={onCreateContributor}
+          />
         </div>
         <Field label="Description">
           <MarkdownEditor value={record.description} onChange={updateDescription} />
         </Field>
       </div>
+    </div>
+  );
+}
 
-      <div className="admin-form-section">
-        <h3>Media</h3>
-        <MediaListEditor
-          label="Release media"
-          value={record.media}
-          pendingUploads={pendingUploads}
-          onChange={(media) => update({ media })}
-          onBrowse={onBrowseMedia}
-        />
-      </div>
+function ContributorEditor({
+  initial,
+  isNew,
+  projects,
+  changelogs,
+  onChange,
+}: {
+  initial: ContributorDraft;
+  isNew: boolean;
+  projects: ProjectRow[];
+  changelogs: ProjectChangelog[];
+  onChange: (record: ContributorDraft) => void;
+}) {
+  const [record, setRecord] = useState<ContributorDraft>(() => structuredClone(initial));
+  const update = (patch: Partial<ContributorDraft>) => {
+    const next = { ...record, ...patch };
+    setRecord(next);
+    onChange(next);
+  };
+  const references: ContributorReference[] = projects.flatMap((project) => {
+    const projectAssigned = project.contributors?.some(
+      (contributor) => contributor.id === record.id,
+    ) ?? false;
+    const assignedChangelogs = changelogs.filter(
+      (changelog) =>
+        changelog.project_id === project.id &&
+        changelog.contributors?.some((contributor) => contributor.id === record.id),
+    );
+    return projectAssigned || assignedChangelogs.length
+      ? [{ project, projectAssigned, changelogs: assignedChangelogs }]
+      : [];
+  });
 
+  return (
+    <div className="admin-editor">
+      <header className="admin-editor-header">
+        <div>
+          <span className="admin-eyebrow">Contributor</span>
+          <h2>{record.name || (isNew ? "New contributor" : "Untitled contributor")}</h2>
+        </div>
+      </header>
+      <section className="admin-form-section">
+        <div className="admin-form-grid admin-contributor-fields">
+          <Field label="Name">
+            <input
+              autoFocus
+              className="admin-input"
+              onChange={(event) => update({ name: event.target.value })}
+              value={record.name}
+            />
+          </Field>
+          <Field label="Contact URL" hint="Optional; use an http or https link.">
+            <input
+              className="admin-input"
+              onChange={(event) => update({ url: event.target.value || null })}
+              placeholder="https://..."
+              type="url"
+              value={record.url ?? ""}
+            />
+          </Field>
+        </div>
+        <div className="admin-contributor-tree">
+          {references.length ? (
+            <ul className="admin-contributor-tree-projects">
+              {references.map(({ project, changelogs: releases }) => (
+                <li className="admin-contributor-tree-project" key={project.id}>
+                  <strong className="admin-contributor-tree-project-name">{project.name}</strong>
+                  {releases.length > 0 && (
+                    <ul className="admin-contributor-tree-changelogs">
+                      {releases.map((release) => (
+                        <li className="admin-contributor-tree-changelog" key={release.id}>
+                          {release.title || release.version}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className="admin-contributor-empty">—</span>
+          )}
+        </div>
+      </section>
     </div>
   );
 }
@@ -1042,11 +1457,45 @@ function MediaPickerDialog({
   );
 }
 
+function MediaLibraryDetail({
+  asset,
+  projects,
+  pendingUploads,
+}: {
+  asset: StorageMediaFile;
+  projects: ProjectRow[];
+  pendingUploads: Map<string, PendingUpload>;
+}) {
+  return (
+    <div className="admin-media-library-detail">
+      <section
+        aria-label={`Preview of ${asset.name}`}
+        className="admin-media-library-preview"
+      >
+        <MediaPreview pendingUploads={pendingUploads} value={asset.publicUrl} />
+      </section>
+      <section className="admin-media-library-usage">
+        <h3>Used by projects</h3>
+        {projects.length === 0 ? (
+          <p>No projects are using this media.</p>
+        ) : (
+          <ul>
+            {projects.map((project) => <li key={project.id}>{project.name}</li>)}
+          </ul>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function getRowSubtitle(
   section: SectionName,
-  record: ProjectRow | ProjectChangelog | DraftRecord,
+  record: ProjectRow | ProjectChangelog | ProjectContributor | DraftRecord,
   projects: ProjectRow[],
 ): string {
+  if (section === "contributors") {
+    return (record as ProjectContributor | ContributorDraft).url || "No contact URL";
+  }
   if (section === "projects") {
     const project = record as ProjectRow | ProjectDraft;
     return [
@@ -1062,10 +1511,13 @@ function getRowSubtitle(
 
 export function AdminPage() {
   const [section, setSection] = useState<SectionName>("projects");
-  const [expandedSections, setExpandedSections] = useState<Record<SectionName, boolean>>({
+  const [expandedSections, setExpandedSections] = useState<Record<"projects" | "contributors", boolean>>({
     projects: true,
-    changelogs: true,
+    contributors: true,
   });
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  const [sidebarWidth, setSidebarWidth] = useState(272);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [initializing, setInitializing] = useState(true);
   const [password, setPassword] = useState("");
@@ -1077,8 +1529,16 @@ export function AdminPage() {
   const [notice, setNotice] = useState("");
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [changelogs, setChangelogs] = useState<ProjectChangelog[]>([]);
+  const [contributors, setContributors] = useState<ProjectContributor[]>([]);
   const [staged, setStaged] = useState<Map<string, StagedChange>>(new Map());
   const [pendingUploads, setPendingUploads] = useState<Map<string, PendingUpload>>(new Map());
+  const [mediaAssets, setMediaAssets] = useState<StorageMediaFile[] | null>(null);
+  const [mediaLibraryLoading, setMediaLibraryLoading] = useState(false);
+  const [mediaLibraryError, setMediaLibraryError] = useState("");
+  const [selectedMediaPath, setSelectedMediaPath] = useState<string | null>(null);
+  const [mediaDeleteTarget, setMediaDeleteTarget] = useState<StorageMediaFile | null>(null);
+  const [stagedMediaDeletions, setStagedMediaDeletions] = useState<Set<string>>(new Set());
+  const [retryMediaDeletions, setRetryMediaDeletions] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
@@ -1087,6 +1547,79 @@ export function AdminPage() {
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const [commitPromptOpen, setCommitPromptOpen] = useState(false);
   const [commitOutcomeUnknown, setCommitOutcomeUnknown] = useState(false);
+  const changeReviewRef = useRef<HTMLDetailsElement>(null);
+
+  const loadMediaLibrary = useCallback(async () => {
+    setMediaLibraryLoading(true);
+    setMediaLibraryError("");
+    try {
+      const folders = [""];
+      const visitedFolders = new Set<string>();
+      const files: StorageMediaFile[] = [];
+      while (folders.length > 0) {
+        const folder = folders.pop();
+        if (folder === undefined || visitedFolders.has(folder)) continue;
+        visitedFolders.add(folder);
+        let offset = 0;
+        while (true) {
+          const response = await adminRequest<MediaResponse>(
+            `/api/admin/media?path=${encodeURIComponent(folder)}&offset=${offset}`,
+          );
+          for (const item of response.items) {
+            if (item.type === "folder") {
+              folders.push(item.path);
+            } else if (item.publicUrl) {
+              files.push({ ...item, type: "file", publicUrl: item.publicUrl });
+            }
+          }
+          if (response.nextOffset === null) break;
+          offset = response.nextOffset;
+        }
+      }
+      setMediaAssets(files.sort((first, second) => first.path.localeCompare(second.path)));
+    } catch (caught) {
+      setMediaAssets(null);
+      setMediaLibraryError(
+        caught instanceof Error ? caught.message : "Unable to load Storage media.",
+      );
+    } finally {
+      setMediaLibraryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (
+      authenticated &&
+      mediaAssets === null &&
+      !mediaLibraryLoading &&
+      !mediaLibraryError
+    ) {
+      void loadMediaLibrary();
+    }
+  }, [
+    authenticated,
+    loadMediaLibrary,
+    mediaAssets,
+    mediaLibraryError,
+    mediaLibraryLoading,
+  ]);
+
+  const openMediaSection = () => {
+    setSection("media");
+    setError("");
+    setNotice("");
+    if (mediaAssets === null && !mediaLibraryLoading) {
+      void loadMediaLibrary();
+    }
+  };
+
+  useDismissOnOutsideClick(
+    changeReviewRef,
+    sidebarOpen && authenticated && staged.size > 0,
+    () => {
+      if (changeReviewRef.current) changeReviewRef.current.open = false;
+    },
+  );
 
   useEffect(() => {
     document.title = "Admin — neverlabs";
@@ -1108,6 +1641,7 @@ export function AdminPage() {
       setAuthenticated(false);
       setPassword("");
       setLoginError("Session expired. Enter the password again.");
+      setMediaDeleteTarget(null);
     };
     window.addEventListener("neverlabs-admin-locked", handleForcedLock);
     return () => {
@@ -1126,6 +1660,7 @@ export function AdminPage() {
       setPassword("");
       setLoginError("This tab was hidden. Enter the password again to continue.");
       setMediaPicker(null);
+      setMediaDeleteTarget(null);
       setInitializing(true);
       setNotice("");
       void clearAdminSession()
@@ -1147,11 +1682,13 @@ export function AdminPage() {
     void Promise.all([
       adminRequest<ProjectRow[]>("/api/admin/projects"),
       adminRequest<ProjectChangelog[]>("/api/admin/changelogs"),
+      adminRequest<ProjectContributor[]>("/api/admin/contributors"),
     ])
-      .then(([projectRows, changelogRows]) => {
+      .then(([projectRows, changelogRows, contributorRows]) => {
         if (!active) return;
         setProjects(projectRows);
         setChangelogs(changelogRows);
+        setContributors(contributorRows);
       })
       .catch((caught: unknown) => {
         if (!active) return;
@@ -1230,7 +1767,32 @@ export function AdminPage() {
     return rows;
   }, [changelogs, deletedProjectIds, staged]);
 
-  const rows = section === "projects" ? visibleProjects : visibleChangelogs;
+  const visibleContributors = useMemo(() => {
+    const rows: VisibleRow[] = [];
+    for (const record of contributors) {
+      const change = staged.get(compoundKey("contributors", record.id));
+      if (change?.operation === "delete") continue;
+      rows.push({
+        key: record.id,
+        record: change?.record ?? record,
+        operation: change?.operation,
+      });
+    }
+    for (const change of staged.values()) {
+      if (change.table === "contributors" && change.operation === "insert" && change.record) {
+        rows.push({ key: change.key, record: change.record, operation: "insert" });
+      }
+    }
+    return rows;
+  }, [contributors, staged]);
+
+  const rows = section === "projects"
+    ? visibleProjects
+    : section === "changelogs"
+      ? visibleChangelogs
+      : section === "contributors"
+        ? visibleContributors
+        : [];
   const activeProjectId = editor?.table === "projects"
     ? editor.record.id ?? null
     : editor?.table === "project_changelogs"
@@ -1239,35 +1801,85 @@ export function AdminPage() {
   const availableProjects = visibleProjects
     .map((row) => row.record as ProjectRow)
     .filter((project) => project.id);
+  const availableChangelogs = visibleChangelogs
+    .map((row) => row.record as ProjectChangelog)
+    .filter((changelog) => changelog.id);
+  const availableContributors = visibleContributors
+    .map((row) => row.record as ProjectContributor)
+    .filter((contributor) => contributor.id);
   const normalizedSearch = search.trim().toLocaleLowerCase();
+  const mediaTreeRows = (mediaAssets ?? []).filter((item) =>
+    !normalizedSearch || `${item.name} ${item.path}`.toLocaleLowerCase().includes(normalizedSearch),
+  );
+  const selectedMedia = mediaAssets?.find((item) => item.path === selectedMediaPath) ?? null;
+  const selectedMediaProjects = selectedMedia
+    ? availableProjects.filter((project) =>
+        projectUsesStorageMedia(project, selectedMedia.path, availableChangelogs),
+      )
+    : [];
   const matchesRecord = (table: TableName, row: VisibleRow) => {
     if (!normalizedSearch) return true;
-    const recordSection = table === "projects" ? "projects" : "changelogs";
+    const recordSection: SectionName = table === "projects"
+      ? "projects"
+      : table === "project_changelogs"
+        ? "changelogs"
+        : "contributors";
     const searchableText = [
       getDisplayName(table, row.record),
       getRowSubtitle(recordSection, row.record, availableProjects),
     ].join(" ").toLocaleLowerCase();
     return searchableText.includes(normalizedSearch);
   };
-  const matchingRows = rows.filter((row) =>
-    matchesRecord(section === "projects" ? "projects" : "project_changelogs", row),
+  const selectedTable: TableName | null = section === "projects"
+    ? "projects"
+    : section === "changelogs"
+      ? "project_changelogs"
+      : section === "contributors"
+        ? "contributors"
+        : null;
+  const matchingRows = selectedTable
+    ? rows.filter((row) => matchesRecord(selectedTable, row))
+    : [];
+  const projectTreeRows = visibleProjects.filter((row) => {
+    const projectId = (row.record as ProjectRow | ProjectDraft).id;
+    return matchesRecord("projects", row) || visibleChangelogs.some(
+      (changelog) =>
+        (changelog.record as ProjectChangelog | ChangelogDraft).project_id === projectId &&
+        matchesRecord("project_changelogs", changelog),
+    );
+  });
+  const changelogsForProject = (projectId: string) =>
+    visibleChangelogs.filter(
+      (row) =>
+        (row.record as ProjectChangelog | ChangelogDraft).project_id === projectId &&
+        matchesRecord("project_changelogs", row),
+    );
+  const contributorTreeRows = visibleContributors.filter((row) =>
+    matchesRecord("contributors", row),
   );
-  const sidebarRowsFor = (table: TableName) => {
-    const tableRows = table === "projects"
-      ? visibleProjects
-      : activeProjectId
-        ? visibleChangelogs.filter(
-            (row) => (row.record as ProjectChangelog | ChangelogDraft).project_id === activeProjectId,
-          )
-        : visibleChangelogs;
-    return tableRows.filter((row) => matchesRecord(table, row));
-  };
   const stagedCount = staged.size;
+  const pendingMediaDeletionPaths = new Set([
+    ...stagedMediaDeletions,
+    ...retryMediaDeletions,
+  ]);
+  const pendingActionCount = stagedCount + pendingMediaDeletionPaths.size;
 
   const openEditor = (nextEditor: EditorState, preserveFeedback = false) => {
-    const nextSection = nextEditor.table === "projects" ? "projects" : "changelogs";
+    const nextSection: SectionName = nextEditor.table === "projects"
+      ? "projects"
+      : nextEditor.table === "project_changelogs"
+        ? "changelogs"
+        : "contributors";
+    if (editor?.table === nextEditor.table && editor.key === nextEditor.key) {
+      setSection(nextSection);
+      return;
+    }
     setSection(nextSection);
-    setExpandedSections((current) => ({ ...current, [nextSection]: true }));
+    const rootSection = nextSection === "contributors" ? "contributors" : "projects";
+    setExpandedSections((current) => ({ ...current, [rootSection]: true }));
+    if (nextEditor.table === "project_changelogs") {
+      setExpandedProjects((current) => new Set(current).add(nextEditor.record.project_id));
+    }
     setSelectedKey(nextEditor.key);
     setEditor(nextEditor);
     setMediaPicker(null);
@@ -1278,7 +1890,14 @@ export function AdminPage() {
   };
 
   const requestEditorNavigation = (nextEditor: EditorState) => {
-    if (editor?.table === nextEditor.table && editor.key === nextEditor.key) return;
+    if (editor?.table === nextEditor.table && editor.key === nextEditor.key) {
+      setSection(nextEditor.table === "projects"
+        ? "projects"
+        : nextEditor.table === "project_changelogs"
+          ? "changelogs"
+          : "contributors");
+      return;
+    }
     if (actionBusy) return;
     if (staged.size > 0) {
       setError("");
@@ -1311,6 +1930,7 @@ export function AdminPage() {
     setPassword("");
     setLoginError("");
     setMediaPicker(null);
+    setMediaDeleteTarget(null);
     setInitializing(true);
     setNotice("");
     void clearAdminSession()
@@ -1325,12 +1945,14 @@ export function AdminPage() {
     setDataLoading(true);
     setError("");
     try {
-      const [projectRows, changelogRows] = await Promise.all([
+      const [projectRows, changelogRows, contributorRows] = await Promise.all([
         adminRequest<ProjectRow[]>("/api/admin/projects"),
         adminRequest<ProjectChangelog[]>("/api/admin/changelogs"),
+        adminRequest<ProjectContributor[]>("/api/admin/contributors"),
       ]);
       setProjects(projectRows);
       setChangelogs(changelogRows);
+      setContributors(contributorRows);
       setNotice(commitOutcomeUnknown
         ? "Data refreshed. Verify the previous commit in Supabase before allowing a retry."
         : "Data refreshed from Supabase.");
@@ -1341,44 +1963,65 @@ export function AdminPage() {
     }
   };
 
-  const startNewRecord = (table: TableName) => {
+  const startNewRecord = (table: TableName, projectId?: string) => {
     const key = `new:${crypto.randomUUID()}`;
-    const draft = changelogDraft();
-    if (activeProjectId) draft.project_id = activeProjectId;
-    requestEditorNavigation(table === "projects"
-      ? { table, key, operation: "insert", record: projectDraft() }
-      : { table, key, operation: "insert", record: draft });
+    if (table === "projects") {
+      requestEditorNavigation({ table, key, operation: "insert", record: projectDraft() });
+    } else if (table === "project_changelogs") {
+      const draft = changelogDraft();
+      if (projectId !== undefined) draft.project_id = projectId;
+      else if (activeProjectId) draft.project_id = activeProjectId;
+      requestEditorNavigation({ table, key, operation: "insert", record: draft });
+    } else {
+      requestEditorNavigation({ table, key, operation: "insert", record: contributorDraft() });
+    }
   };
 
   const startEditRecord = (table: TableName, row: VisibleRow) => {
     const operation = row.operation === "insert" ? "insert" : "update";
-    requestEditorNavigation(table === "projects"
-      ? {
+    if (table === "projects") {
+      requestEditorNavigation({
           table,
           key: row.key,
           operation,
           record: projectDraft(row.record as ProjectRow),
-        }
-      : {
+        });
+    } else if (table === "project_changelogs") {
+      requestEditorNavigation({
           table,
           key: row.key,
           operation,
           record: changelogDraft(row.record as ProjectChangelog),
         });
+    } else {
+      requestEditorNavigation({
+        table,
+        key: row.key,
+        operation,
+        record: contributorDraft(row.record as ProjectContributor),
+      });
+    }
   };
 
-  const saveRecord = (table: TableName, key: string, operation: Operation, record: DraftRecord) => {
-    const next = new Map(staged);
+  const stageRecordChange = (
+    changes: Map<string, StagedChange>,
+    table: TableName,
+    key: string,
+    operation: Operation,
+    record: DraftRecord,
+  ) => {
     const index = compoundKey(table, key);
-    const existing = next.get(index);
+    const existing = changes.get(index);
     const isNew = operation === "insert" || existing?.operation === "insert";
     const serverRecord = table === "projects"
       ? projects.find((item) => item.id === key)
-      : changelogs.find((item) => item.id === key);
+      : table === "project_changelogs"
+        ? changelogs.find((item) => item.id === key)
+        : contributors.find((item) => item.id === key);
     if (!isNew && serverRecord && JSON.stringify(serverRecord) === JSON.stringify(record)) {
-      next.delete(index);
+      changes.delete(index);
     } else {
-      next.set(index, {
+      changes.set(index, {
         table,
         operation: isNew ? "insert" : "update",
         key,
@@ -1387,6 +2030,11 @@ export function AdminPage() {
         label: getDisplayName(table, record),
       });
     }
+  };
+
+  const saveRecord = (table: TableName, key: string, operation: Operation, record: DraftRecord) => {
+    const next = new Map(staged);
+    stageRecordChange(next, table, key, operation, record);
     setStaged(next);
     setSelectedKey(key);
     setError("");
@@ -1397,6 +2045,90 @@ export function AdminPage() {
     setDeleteTarget({ table, row });
   };
 
+  const confirmMediaDelete = () => {
+    if (!mediaDeleteTarget) return;
+    const next = new Map(staged);
+    for (const row of visibleProjects) {
+      const project = row.record as ProjectDraft;
+      const description = removeLocalizedStorageReferences(
+        project.description,
+        mediaDeleteTarget.path,
+      );
+      if (
+        !projectStoragePaths(project).has(mediaDeleteTarget.path) &&
+        JSON.stringify(description) === JSON.stringify(project.description)
+      ) continue;
+      const updatedProject: ProjectDraft = {
+        ...project,
+        primary_media:
+          storageObjectPath(project.primary_media) === mediaDeleteTarget.path
+            ? null
+            : project.primary_media,
+        media: (project.media ?? []).filter(
+          (url) => storageObjectPath(url) !== mediaDeleteTarget.path,
+        ),
+        description,
+      };
+      stageRecordChange(
+        next,
+        "projects",
+        row.key,
+        row.operation ?? "update",
+        updatedProject,
+      );
+    }
+    for (const row of visibleChangelogs) {
+      const changelog = row.record as ProjectChangelog | ChangelogDraft;
+      const description = removeLocalizedStorageReferences(
+        changelog.description,
+        mediaDeleteTarget.path,
+      );
+      if (JSON.stringify(description) === JSON.stringify(changelog.description)) continue;
+      stageRecordChange(
+        next,
+        "project_changelogs",
+        row.key,
+        row.operation ?? "update",
+        { ...changelog, description },
+      );
+    }
+    setStaged(next);
+    setStagedMediaDeletions((current) => new Set(current).add(mediaDeleteTarget.path));
+    setMediaDeleteTarget(null);
+    setError("");
+    setNotice(
+      `Deletion staged for ${mediaDeleteTarget.name}. Commit changes to remove the file from Storage and all projects.`,
+    );
+  };
+
+  const createContributor = (name: string, url: string | null): ProjectContributor => {
+    const existing = availableContributors.find(
+      (item) =>
+        item.name.trim().toLocaleLowerCase() === name.trim().toLocaleLowerCase() &&
+        (item.url ?? null) === (url ?? null),
+    );
+    if (existing) return existing;
+    const contributor = { id: crypto.randomUUID(), name, url };
+    saveRecord("contributors", contributor.id, "insert", contributorDraft(contributor));
+    return contributor;
+  };
+
+  const hasStagedContributorAssignments = (
+    changes: Map<string, StagedChange>,
+    contributorId: string,
+  ) =>
+    [...changes.values()].some((change) => {
+      if (
+        (change.table !== "projects" && change.table !== "project_changelogs") ||
+        !change.record ||
+        change.operation === "delete"
+      ) {
+        return false;
+      }
+      const record = change.record as ProjectDraft | ChangelogDraft;
+      return record.contributors?.some((contributor) => contributor.id === contributorId) ?? false;
+    });
+
   const confirmDelete = () => {
     if (!deleteTarget) return;
     const { table, row } = deleteTarget;
@@ -1404,6 +2136,16 @@ export function AdminPage() {
     const next = new Map(staged);
     const key = compoundKey(table, row.key);
     const current = next.get(key);
+    if (
+      table === "contributors" &&
+      current?.operation === "insert" &&
+      current.record &&
+      hasStagedContributorAssignments(next, (current.record as ContributorDraft).id ?? "")
+    ) {
+      setError("Remove this new contributor from staged projects and changelogs before discarding it.");
+      setDeleteTarget(null);
+      return;
+    }
     if (current?.operation === "insert") {
       next.delete(key);
     } else {
@@ -1440,6 +2182,15 @@ export function AdminPage() {
 
   const removeStagedChange = (change: StagedChange) => {
     const next = new Map(staged);
+    if (
+      change.table === "contributors" &&
+      change.operation === "insert" &&
+      change.record &&
+      hasStagedContributorAssignments(next, (change.record as ContributorDraft).id ?? "")
+    ) {
+      setError("Remove this new contributor from staged projects and changelogs before discarding it.");
+      return;
+    }
     next.delete(stageKey(change));
     setStaged(next);
     if (selectedKey === change.key) {
@@ -1541,19 +2292,57 @@ export function AdminPage() {
   };
 
   const commit = async (): Promise<boolean> => {
-    if (staged.size === 0 || commitOutcomeUnknown || actionBusy) return false;
+    if (
+      (staged.size === 0 &&
+        stagedMediaDeletions.size === 0 &&
+        retryMediaDeletions.size === 0) ||
+      commitOutcomeUnknown ||
+      actionBusy
+    ) return false;
     if (staged.size > 500) {
       setError("A single database commit supports up to 500 row changes.");
       return false;
     }
+    const remainingProjects = visibleProjects.map(
+      (row) => row.record as ProjectRow | ProjectDraft,
+    );
+    const remainingChangelogs = visibleChangelogs.map(
+      (row) => row.record as ProjectChangelog | ChangelogDraft,
+    );
+    const stillReferencedMedia = new Set([
+      ...stagedMediaDeletions,
+      ...retryMediaDeletions,
+    ]);
+    const referencedPaths = [...stillReferencedMedia].filter((path) =>
+      remainingProjects.some((project) =>
+        projectUsesStorageMedia(project, path, remainingChangelogs),
+      ) ||
+      remainingChangelogs.some((changelog) =>
+        localizedStoragePaths(changelog.description).has(path),
+      ),
+    );
+    if (referencedPaths.length > 0) {
+      setError(
+        `Cannot delete Storage media while a project still uses it: ${referencedPaths.map((path) => path.split("/").at(-1)).join(", ")}.`,
+      );
+      return false;
+    }
     const invalidChange = [...staged.values()].find((change) => {
       if (change.operation === "delete" || !change.record) return false;
-      if ("name" in change.record) return !change.record.name.trim();
+      if ("name" in change.record) {
+        return !change.record.name.trim() ||
+          (change.table === "contributors" &&
+            change.record.url !== null &&
+            typeof change.record.url === "string" &&
+            !safeHttpUrl(change.record.url));
+      }
       return !change.record.project_id || !change.record.title.trim() || !change.record.version.trim();
     });
     if (invalidChange) {
       setError(invalidChange.table === "projects"
         ? "Project name is required before committing."
+        : invalidChange.table === "contributors"
+          ? "Contributor name is required, and its contact URL must use http or https."
         : "A changelog needs a project, title, and version before committing.");
       return false;
     }
@@ -1561,6 +2350,27 @@ export function AdminPage() {
     setError("");
     setNotice("");
     const changes = [...staged.values()];
+    const pathsRemovedFromProjects = removedProjectStoragePaths(
+      projects,
+      remainingProjects,
+      changelogs,
+      remainingChangelogs,
+    );
+    const pathsHandledByProjectDeletes = new Set(
+      [...staged.values()]
+        .filter((change) => change.table === "projects" && change.operation === "delete")
+        .flatMap((change) => {
+          const project = projects.find((item) => item.id === change.id);
+          return project ? [...projectAttachedStoragePaths(project)] : [];
+        }),
+    );
+    const mediaPathsToDelete = new Set([
+      ...stagedMediaDeletions,
+      ...retryMediaDeletions,
+      ...[...pathsRemovedFromProjects].filter(
+        (path) => !pathsHandledByProjectDeletes.has(path),
+      ),
+    ]);
     const uploadReferences = collectPendingReferences(changes, pendingUploads);
     let uploadedPaths: string[] = [];
     try {
@@ -1574,66 +2384,120 @@ export function AdminPage() {
       return false;
     }
 
-    const payload = changes.map((change) =>
-      change.operation === "delete"
-        ? { table: change.table, operation: "delete", id: change.id }
-        : {
-            table: change.table,
-            operation: change.operation,
-            record: replacePendingReferences(change.record, pendingUploads),
+    const payload = changes.map((change) => {
+      if (change.operation === "delete") {
+        return { table: change.table, operation: "delete", id: change.id };
+      }
+      const record = replacePendingReferences(change.record, pendingUploads);
+      if (change.table === "projects" || change.table === "project_changelogs") {
+        const row = record as ProjectDraft | ChangelogDraft;
+        return {
+          table: change.table,
+          operation: change.operation,
+          record: {
+            ...row,
+            contributors: (row.contributors ?? []).map((contributor) => contributor.id),
           },
-    );
+        };
+      }
+      return { table: change.table, operation: change.operation, record };
+    });
 
-    let response: Response;
-    try {
-      response = await fetch("/api/admin/commit", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ changes: payload }),
-      });
-    } catch {
-      setCommitOutcomeUnknown(true);
-      setError("The connection ended during database commit. Its outcome is unknown; uploaded files and staged changes were kept. Refresh Supabase before retrying.");
-      setActionBusy(false);
-      return false;
+    if (changes.length > 0) {
+      let response: Response;
+      try {
+        response = await fetch("/api/admin/commit", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ changes: payload }),
+        });
+      } catch {
+        setCommitOutcomeUnknown(true);
+        setError("The connection ended during database commit. Its outcome is unknown; uploaded files and staged changes were kept. Refresh Supabase before retrying.");
+        setActionBusy(false);
+        return false;
+      }
+
+      let result: { error?: string };
+      try {
+        result = await response.json() as { error?: string };
+      } catch {
+        setCommitOutcomeUnknown(true);
+        setError("The server response could not be read. The commit outcome is unknown; uploaded files and staged changes were kept.");
+        setActionBusy(false);
+        return false;
+      }
+
+      if (!response.ok) {
+        let cleanupMessage = "";
+        if (uploadedPaths.length > 0) {
+          try {
+            await adminRequest("/api/admin/media/cleanup", {
+              method: "POST",
+              body: { paths: uploadedPaths },
+            });
+          } catch (cleanupError) {
+            cleanupMessage = ` Uploaded files could not be cleaned up: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+          }
+        }
+        setError(`${result.error ?? "Database commit failed."}${cleanupMessage}`);
+        setActionBusy(false);
+        return false;
+      }
+
+      setStaged(new Map());
+      setStagedMediaDeletions(new Set());
+      setPendingUploads(new Map());
+      setEditor(null);
+      setSelectedKey(null);
     }
+    if (changes.length === 0) setStagedMediaDeletions(new Set());
 
-    let result: { error?: string };
-    try {
-      result = await response.json() as { error?: string };
-    } catch {
-      setCommitOutcomeUnknown(true);
-      setError("The server response could not be read. The commit outcome is unknown; uploaded files and staged changes were kept.");
-      setActionBusy(false);
-      return false;
-    }
-
-    if (!response.ok) {
-      let cleanupMessage = "";
-      if (uploadedPaths.length > 0) {
+    let mediaCleanupError = "";
+    const failedMediaPaths = new Set<string>();
+    const deletedMediaPaths = new Set<string>();
+    if (mediaPathsToDelete.size > 0) {
+      const paths = [...mediaPathsToDelete];
+      const cleanupErrors: string[] = [];
+      for (let offset = 0; offset < paths.length; offset += 1000) {
+        const batch = paths.slice(offset, offset + 1000);
         try {
-          await adminRequest("/api/admin/media/cleanup", {
+          await adminRequest("/api/admin/media/delete", {
             method: "POST",
-            body: { paths: uploadedPaths },
+            body: { paths: batch },
           });
-        } catch (cleanupError) {
-          cleanupMessage = ` Uploaded files could not be cleaned up: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+          batch.forEach((path) => deletedMediaPaths.add(path));
+        } catch (caught) {
+          batch.forEach((path) => failedMediaPaths.add(path));
+          cleanupErrors.push(caught instanceof Error ? caught.message : String(caught));
         }
       }
-      setError(`${result.error ?? "Database commit failed."}${cleanupMessage}`);
-      setActionBusy(false);
-      return false;
+      setRetryMediaDeletions(failedMediaPaths);
+      setMediaAssets((current) =>
+        current?.filter((item) => !deletedMediaPaths.has(item.path)) ?? null,
+      );
+      if (selectedMediaPath && deletedMediaPaths.has(selectedMediaPath)) {
+        setSelectedMediaPath(null);
+      }
+      if (cleanupErrors.length > 0) mediaCleanupError = cleanupErrors.join("; ");
     }
 
-    setStaged(new Map());
-    setPendingUploads(new Map());
-    setEditor(null);
-    setSelectedKey(null);
-    setNotice("All staged rows were committed in one database transaction.");
-    await refresh();
+    if (changes.length > 0) await refresh();
+    if (mediaCleanupError) {
+      const names = [...failedMediaPaths]
+        .map((path) => path.split("/").at(-1))
+        .join(", ");
+      setError(
+        `${changes.length > 0 ? "Database changes were committed, but " : ""}Storage media could not be deleted (${names}): ${mediaCleanupError}. Use Commit changes to retry.`,
+      );
+    } else {
+      setNotice(changes.length > 0
+        ? "All staged changes were committed."
+        : "Storage media deleted.");
+    }
     setActionBusy(false);
-    return true;
+    return !mediaCleanupError;
   };
 
   const commitAndContinue = async () => {
@@ -1646,33 +2510,35 @@ export function AdminPage() {
     const uploads = pendingUploads;
     if (!await commit()) return;
     setPendingNavigation(null);
-    if (target.table === "projects") {
-      const record = replacePendingReferences(target.record, uploads);
-      if (target.operation === "insert") {
-        if (!record.id) {
-          setError("The committed record is missing its ID. Refresh the table before editing it.");
-          setEditor(null);
-          setSelectedKey(null);
-          return;
-        }
-        openEditor({ table: "projects", key: record.id, operation: "update", record }, true);
-      } else {
-        openEditor({ ...target, record }, true);
-      }
-      return;
-    }
     const record = replacePendingReferences(target.record, uploads);
-    if (target.operation === "insert") {
-      if (!record.id) {
-        setError("The committed record is missing its ID. Refresh the table before editing it.");
-        setEditor(null);
-        setSelectedKey(null);
-        return;
-      }
-      openEditor({ table: "project_changelogs", key: record.id, operation: "update", record }, true);
+    if (target.operation === "insert" && !record.id) {
+      setError("The committed record is missing its ID. Refresh the table before editing it.");
+      setEditor(null);
+      setSelectedKey(null);
       return;
     }
-    openEditor({ ...target, record }, true);
+    if (target.table === "projects") {
+      openEditor({
+        table: "projects",
+        key: record.id ?? target.key,
+        operation: target.operation === "insert" ? "update" : target.operation,
+        record: record as ProjectDraft,
+      }, true);
+    } else if (target.table === "project_changelogs") {
+      openEditor({
+        table: "project_changelogs",
+        key: record.id ?? target.key,
+        operation: target.operation === "insert" ? "update" : target.operation,
+        record: record as ChangelogDraft,
+      }, true);
+    } else {
+      openEditor({
+        table: "contributors",
+        key: record.id ?? target.key,
+        operation: target.operation === "insert" ? "update" : target.operation,
+        record: record as ContributorDraft,
+      }, true);
+    }
   };
 
   const discardAndContinue = () => {
@@ -1684,7 +2550,9 @@ export function AdminPage() {
       const key = `new:${crypto.randomUUID()}`;
       targetEditor = target.table === "projects"
         ? { table: "projects", key, operation: "insert", record: projectDraft() }
-        : { table: "project_changelogs", key, operation: "insert", record: changelogDraft() };
+        : target.table === "project_changelogs"
+          ? { table: "project_changelogs", key, operation: "insert", record: changelogDraft() }
+          : { table: "contributors", key, operation: "insert", record: contributorDraft() };
     } else if (target.table === "projects" && target.operation !== "insert") {
       const record = projects.find((project) => project.id === target.key);
       if (record) {
@@ -1700,6 +2568,16 @@ export function AdminPage() {
           record: changelogDraft(record),
         };
       }
+    } else if (target.table === "contributors" && target.operation !== "insert") {
+      const record = contributors.find((contributor) => contributor.id === target.key);
+      if (record) {
+        targetEditor = {
+          table: "contributors",
+          key: record.id,
+          operation: "update",
+          record: contributorDraft(record),
+        };
+      }
     }
     setStaged(new Map());
     setPendingUploads(new Map());
@@ -1710,9 +2588,10 @@ export function AdminPage() {
   };
 
   const discardAll = () => {
-    if (staged.size === 0) return;
-    if (!window.confirm("Discard every staged change? No database changes have been made yet.")) return;
+    if (staged.size === 0 && stagedMediaDeletions.size === 0) return;
+    if (!window.confirm("Discard every staged database change and uncommitted media deletion?")) return;
     setStaged(new Map());
+    setStagedMediaDeletions(new Set());
     setPendingUploads(new Map());
     setEditor(null);
     setSelectedKey(null);
@@ -1729,7 +2608,7 @@ export function AdminPage() {
   };
 
   const stageDescription = (change: StagedChange) =>
-    `${change.table === "projects" ? "Project" : "Changelog"} · ${
+    `${change.table === "projects" ? "Project" : change.table === "contributors" ? "Contributor" : "Changelog"} · ${
       change.operation === "insert" ? "New" : change.operation === "update" ? "Edited" : "Delete"
     } · ${change.label}`;
   const pendingTargetIsInsert = pendingNavigation
@@ -1737,109 +2616,459 @@ export function AdminPage() {
     : false;
 
   return (
-    <main className="admin-app">
-      <aside className="admin-sidebar">
-        <a className="admin-brand" href="/admin/" aria-label="Neverlabs admin home">
-          <img src="/images/logo.png" alt="neverlabs" />
-        </a>
-        <div className="admin-sidebar-tools">
-          <div className="admin-list-toolbar">
-            <Search size={15} />
-            <input
-              aria-label="Search records"
-              disabled={!authenticated}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Find a record…"
-              value={search}
-            />
-            {search && <button aria-label="Clear search" onClick={() => setSearch("")} type="button"><X size={14} /></button>}
+    <main
+      className="admin-app"
+      style={{
+        gridTemplateColumns: sidebarOpen ? `${sidebarWidth}px minmax(0, 1fr)` : "minmax(0, 1fr)",
+      }}
+    >
+      {sidebarOpen && (
+        <aside className="admin-sidebar">
+          <div className="admin-sidebar-header">
+            <a className="admin-brand" href="/admin/" aria-label="Neverlabs admin home">
+              <img src="/images/logo.png" alt="neverlabs" />
+            </a>
+            <div className="admin-sidebar-header-actions">
+              {authenticated && (
+                <button
+                  aria-label="Lock workspace"
+                  className="admin-sidebar-lock"
+                  onClick={logout}
+                  title="Lock workspace"
+                  type="button"
+                >
+                  <Lock size={15} />
+                </button>
+              )}
+              <button
+                aria-label="Close sidebar"
+                className="admin-sidebar-close"
+                onClick={() => setSidebarOpen(false)}
+                title="Close sidebar"
+                type="button"
+              >
+                <LogOut size={16} />
+              </button>
+            </div>
           </div>
-        </div>
-        <nav className="admin-tree" aria-label="Database tables">
-          {([
-            { section: "projects" as const, table: "projects" as const, label: "Projects", icon: <FolderKanban size={15} /> },
-            { section: "changelogs" as const, table: "project_changelogs" as const, label: "Changelogs", icon: <FileText size={15} /> },
-          ]).map((item) => {
-            const tableRows = sidebarRowsFor(item.table);
-            const expanded = expandedSections[item.section];
-            return (
-              <div className={`admin-tree-group${section === item.section ? " current" : ""}`} key={item.table}>
-                <div className="admin-tree-table-row">
-                  <button
-                    aria-expanded={expanded}
-                    className="admin-tree-table"
-                    onClick={() => setExpandedSections((current) => ({
-                      ...current,
-                      [item.section]: !current[item.section],
-                    }))}
-                    type="button"
-                  >
-                    {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    {item.icon}
-                    <span>{item.label}</span>
-                    <small>{authenticated ? (item.section === "projects" ? visibleProjects.length : visibleChangelogs.length) : "—"}</small>
-                  </button>
-                  <button
-                    aria-label={`Add ${item.section === "projects" ? "project" : "changelog"}`}
-                    className="admin-tree-add"
-                    disabled={!authenticated || actionBusy}
-                    onClick={() => startNewRecord(item.table)}
-                    title={`Add ${item.section === "projects" ? "project" : "changelog"}`}
-                    type="button"
-                  >
-                    <Plus size={15} />
-                  </button>
-                </div>
-                {expanded && authenticated && (
-                  <div className="admin-tree-children">
-                    {tableRows.length === 0 ? (
-                      <span className="admin-tree-empty">
-                        {search
-                          ? "No matches"
-                          : item.table === "project_changelogs" && activeProjectId
-                            ? "No changelogs for this project"
-                            : "No records"}
-                      </span>
-                    ) : tableRows.map((row) => (
-                      <div className={`admin-tree-record${editor?.table === item.table && selectedKey === row.key ? " selected" : ""}`} key={row.key}>
+          <div className="admin-sidebar-tools">
+            <div className="admin-list-toolbar">
+              <Search size={15} />
+              <input
+                aria-label="Search records"
+                disabled={!authenticated}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Find a record…"
+                value={search}
+              />
+              {search && <button aria-label="Clear search" onClick={() => setSearch("")} type="button"><X size={14} /></button>}
+            </div>
+          </div>
+          <nav className="admin-tree" aria-label="Database tables">
+            <div className={`admin-tree-group${section === "media" ? " current" : ""}`}>
+              <div className="admin-tree-table-row">
+                <button
+                  aria-current={section === "media" ? "page" : undefined}
+                  className="admin-tree-table"
+                  onClick={openMediaSection}
+                  type="button"
+                >
+                  <FileImage size={15} />
+                  <span>Media</span>
+                  {authenticated && mediaAssets && <small>{mediaAssets.length}</small>}
+                </button>
+                <button
+                  aria-label="Refresh media"
+                  className="admin-tree-add"
+                  disabled={!authenticated || mediaLibraryLoading}
+                  onClick={() => void loadMediaLibrary()}
+                  title="Refresh media"
+                  type="button"
+                >
+                  {mediaLibraryLoading
+                    ? <LoaderCircle className="admin-spinning" size={14} />
+                    : <RefreshCw size={14} />}
+                </button>
+              </div>
+              {authenticated && (
+                <div className="admin-tree-media">
+                  {mediaAssets === null && mediaLibraryError ? (
+                    <span className="admin-tree-empty" role="alert">{mediaLibraryError}</span>
+                  ) : mediaAssets === null ? (
+                    <span className="admin-tree-empty"><LoaderCircle className="admin-spinning" size={12} /> Loading media</span>
+                  ) : mediaTreeRows.length === 0 ? (
+                    <span className="admin-tree-empty">{search ? "No matches" : "No media files"}</span>
+                  ) : mediaTreeRows.map((item) => (
+                    <div
+                      className={`admin-tree-media-row${section === "media" && selectedMediaPath === item.path ? " selected" : ""}`}
+                      key={item.path}
+                    >
+                      <button
+                        className="admin-tree-media-select"
+                        onClick={() => {
+                          setSelectedMediaPath(item.path);
+                          openMediaSection();
+                        }}
+                        title={item.path}
+                        type="button"
+                      >
+                        <FileImage size={13} />
+                        <span className="admin-tree-record-copy">
+                          <strong>{item.name}</strong>
+                          {item.path.includes("/") && <small>{item.path.slice(0, item.path.lastIndexOf("/"))}</small>}
+                        </span>
+                      </button>
+                      <div className="admin-tree-media-actions">
                         <button
-                          className="admin-tree-record-select"
+                          aria-label={`Copy raw URL for ${item.name}`}
+                          disabled={actionBusy}
                           onClick={() => {
-                            startEditRecord(item.table, row);
+                            void copyMediaUrl(item.publicUrl)
+                              .then(() => setNotice("Raw media URL copied."))
+                              .catch((caught: unknown) => setError(
+                                caught instanceof Error ? caught.message : "Unable to copy the media URL.",
+                              ));
                           }}
+                          title="Copy raw URL"
                           type="button"
                         >
-                          <span className="admin-tree-guide" />
-                          <span className="admin-tree-record-copy">
-                            <strong>{getDisplayName(item.table, row.record)}</strong>
-                            <small>{getRowSubtitle(item.section, row.record, availableProjects)}</small>
-                          </span>
-                          {row.operation && <span className={`admin-row-state admin-row-${row.operation}`}>{row.operation === "insert" ? "new" : row.operation}</span>}
+                          <Copy size={13} />
                         </button>
                         <button
-                          aria-label={`Stage delete ${getDisplayName(item.table, row.record)}`}
-                          className="admin-tree-delete"
-                          onClick={() => requestDeleteRecord(item.table, row)}
-                          title="Stage delete"
+                          aria-label={`Delete ${item.name} from Storage`}
+                          disabled={actionBusy}
+                          onClick={() => setMediaDeleteTarget(item)}
+                          title="Delete media"
                           type="button"
                         >
-                          <Trash2 size={14} />
+                          <Trash2 size={13} />
                         </button>
                       </div>
-                    ))}
-                  </div>
-                )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className={`admin-tree-group${section === "projects" || section === "changelogs" ? " current" : ""}`}>
+              <div className="admin-tree-table-row">
+                <button
+                  aria-expanded={expandedSections.projects}
+                  className="admin-tree-table"
+                  onClick={() => setExpandedSections((current) => ({
+                    ...current,
+                    projects: !current.projects,
+                  }))}
+                  type="button"
+                >
+                  {expandedSections.projects ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <FolderKanban size={15} />
+                  <span>Projects</span>
+                  {authenticated && <small>{visibleProjects.length}</small>}
+                </button>
+                <button
+                  aria-label="Add project"
+                  className="admin-tree-add"
+                  disabled={!authenticated || actionBusy}
+                  onClick={() => startNewRecord("projects")}
+                  title="Add project"
+                  type="button"
+                >
+                  <Plus size={15} />
+                </button>
               </div>
-            );
-          })}
-        </nav>
-        <div className="admin-sidebar-footer">
-          {authenticated && <button className="admin-lock-button" onClick={logout} type="button"><LogOut size={14} /> Lock workspace</button>}
-          <a href="/" target="_blank" rel="noreferrer"><ArrowUpRight size={15} /> Open website</a>
-        </div>
-      </aside>
+              {expandedSections.projects && authenticated && (
+                <div className="admin-tree-projects">
+                  {projectTreeRows.length === 0 ? (
+                    <span className="admin-tree-empty">{search ? "No matches" : "No projects"}</span>
+                  ) : projectTreeRows.map((row) => {
+                    const project = row.record as ProjectRow | ProjectDraft;
+                    const projectId = project.id ?? row.key;
+                    const projectChangelogs = project.id ? changelogsForProject(project.id) : [];
+                    const projectExpanded = expandedProjects.has(projectId);
+                    return (
+                      <div className="admin-tree-project-group" key={row.key}>
+                        <div className={`admin-tree-project-row${section === "projects" && editor?.table === "projects" && selectedKey === row.key ? " selected" : ""}`}>
+                          {projectChangelogs.length > 0 ? (
+                            <button
+                              aria-expanded={projectExpanded}
+                              aria-label={`${projectExpanded ? "Collapse" : "Expand"} changelogs for ${project.name}`}
+                              className="admin-tree-project-toggle"
+                              onClick={() => setExpandedProjects((current) => {
+                                const next = new Set(current);
+                                if (next.has(projectId)) next.delete(projectId);
+                                else next.add(projectId);
+                                return next;
+                              })}
+                              type="button"
+                            >
+                              {projectExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                            </button>
+                          ) : (
+                            <span className="admin-tree-project-toggle-placeholder" />
+                          )}
+                          <button
+                            className="admin-tree-project-select"
+                            onClick={() => startEditRecord("projects", row)}
+                            type="button"
+                          >
+                            <span className="admin-tree-record-copy">
+                              <strong>{getDisplayName("projects", row.record)}</strong>
+                              <small>{getRowSubtitle("projects", row.record, availableProjects)}</small>
+                            </span>
+                            {row.operation && <span className={`admin-row-state admin-row-${row.operation}`}>{row.operation === "insert" ? "new" : row.operation}</span>}
+                          </button>
+                          <button
+                            aria-label={`Add changelog for ${project.name}`}
+                            className="admin-tree-add admin-tree-add-child"
+                            disabled={!authenticated || actionBusy}
+                            onClick={() => startNewRecord("project_changelogs", project.id ?? row.key)}
+                            title={`Add changelog for ${project.name}`}
+                            type="button"
+                          >
+                            <Plus size={14} />
+                          </button>
+                          <button
+                            aria-label={`Stage delete ${getDisplayName("projects", row.record)}`}
+                            className="admin-tree-delete"
+                            disabled={actionBusy}
+                            onClick={() => requestDeleteRecord("projects", row)}
+                            title="Stage delete"
+                            type="button"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                        {projectExpanded && projectChangelogs.length > 0 && (
+                          <div className="admin-tree-changelog-list">
+                            {projectChangelogs.map((changelog) => (
+                              <div
+                                className={`admin-tree-changelog-row${section === "changelogs" && editor?.table === "project_changelogs" && selectedKey === changelog.key ? " selected" : ""}`}
+                                key={changelog.key}
+                              >
+                                <button
+                                  className="admin-tree-changelog-select"
+                                  onClick={() => startEditRecord("project_changelogs", changelog)}
+                                  type="button"
+                                >
+                                  <span className="admin-tree-record-copy">
+                                    <strong>{getDisplayName("project_changelogs", changelog.record)}</strong>
+                                    <small>{(changelog.record as ProjectChangelog | ChangelogDraft).release}</small>
+                                  </span>
+                                  {changelog.operation && <span className={`admin-row-state admin-row-${changelog.operation}`}>{changelog.operation === "insert" ? "new" : changelog.operation}</span>}
+                                </button>
+                                <button
+                                  aria-label={`Stage delete ${getDisplayName("project_changelogs", changelog.record)}`}
+                                  className="admin-tree-delete"
+                                  disabled={actionBusy}
+                                  onClick={() => requestDeleteRecord("project_changelogs", changelog)}
+                                  title="Stage delete"
+                                  type="button"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className={`admin-tree-group${section === "contributors" ? " current" : ""}`}>
+              <div className="admin-tree-table-row">
+                <button
+                  aria-expanded={expandedSections.contributors}
+                  className="admin-tree-table"
+                  onClick={() => setExpandedSections((current) => ({
+                    ...current,
+                    contributors: !current.contributors,
+                  }))}
+                  type="button"
+                >
+                  {expandedSections.contributors ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <Users size={15} />
+                  <span>Contributors</span>
+                  {authenticated && <small>{visibleContributors.length}</small>}
+                </button>
+                <button
+                  aria-label="Add contributor"
+                  className="admin-tree-add"
+                  disabled={!authenticated || actionBusy}
+                  onClick={() => startNewRecord("contributors")}
+                  title="Add contributor"
+                  type="button"
+                >
+                  <Plus size={15} />
+                </button>
+              </div>
+              {expandedSections.contributors && authenticated && (
+                <div className="admin-tree-contributors">
+                  {contributorTreeRows.length === 0 ? (
+                    <span className="admin-tree-empty">{search ? "No matches" : "No contributors"}</span>
+                  ) : contributorTreeRows.map((row) => (
+                    <div className={`admin-tree-contributor-row${section === "contributors" && editor?.table === "contributors" && selectedKey === row.key ? " selected" : ""}`} key={row.key}>
+                      <button
+                        className="admin-tree-contributor-select"
+                        onClick={() => startEditRecord("contributors", row)}
+                        type="button"
+                      >
+                        <span className="admin-tree-record-copy">
+                          <strong>{getDisplayName("contributors", row.record)}</strong>
+                          <small>{getRowSubtitle("contributors", row.record, availableProjects)}</small>
+                        </span>
+                        {row.operation && <span className={`admin-row-state admin-row-${row.operation}`}>{row.operation === "insert" ? "new" : row.operation}</span>}
+                      </button>
+                      <button
+                        aria-label={`Stage delete ${getDisplayName("contributors", row.record)}`}
+                        className="admin-tree-delete"
+                        disabled={actionBusy}
+                        onClick={() => requestDeleteRecord("contributors", row)}
+                        title="Stage delete"
+                        type="button"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+          </nav>
+          <div className="admin-sidebar-footer">
+            <a href="/" target="_blank" rel="noreferrer"><ArrowUpRight size={15} /> Open website</a>
+            <div className="admin-sidebar-footer-actions">
+              {authenticated && pendingActionCount > 0 && (
+                <>
+                  <details className="admin-change-review" ref={changeReviewRef}>
+                    <summary aria-label={`Review ${pendingActionCount} pending changes`}>Changes {pendingActionCount}</summary>
+                    <div className="admin-change-review-list">
+                      {[...staged.values()].map((change) => (
+                        <div key={stageKey(change)}>
+                          <span>{stageDescription(change)}</span>
+                          <button type="button" onClick={() => removeStagedChange(change)} aria-label={`Discard ${change.label}`}><X size={15} /></button>
+                        </div>
+                      ))}
+                      {[...stagedMediaDeletions].map((path) => (
+                        <div key={`media-delete:${path}`}>
+                          <span>Storage media · Delete · {path.split("/").at(-1)}</span>
+                          <button
+                            aria-label={`Discard deletion of ${path.split("/").at(-1)}`}
+                            onClick={() => setStagedMediaDeletions((current) => {
+                              const next = new Set(current);
+                              next.delete(path);
+                              return next;
+                            })}
+                            type="button"
+                          >
+                            <X size={15} />
+                          </button>
+                        </div>
+                      ))}
+                      {[...retryMediaDeletions]
+                        .filter((path) => !stagedMediaDeletions.has(path))
+                        .map((path) => (
+                          <div key={`media-retry:${path}`}>
+                            <span>Storage media · Retry delete · {path.split("/").at(-1)}</span>
+                            <button
+                              aria-label={`Cancel retry for ${path.split("/").at(-1)}`}
+                              onClick={() => setRetryMediaDeletions((current) => {
+                                const next = new Set(current);
+                                next.delete(path);
+                                return next;
+                              })}
+                              type="button"
+                            >
+                              <X size={15} />
+                            </button>
+                          </div>
+                        ))}
+                    </div>
+                  </details>
+                  {(stagedCount > 0 || stagedMediaDeletions.size > 0) && (
+                    <button
+                      aria-label="Discard all staged changes"
+                      className="admin-sidebar-action"
+                      onClick={discardAll}
+                      title="Discard all staged changes"
+                      type="button"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  )}
+                </>
+              )}
+              {authenticated && (
+                <button
+                  aria-label={actionBusy ? "Committing changes" : commitOutcomeUnknown ? "Review uncertain commit" : pendingActionCount ? "Commit changes" : "No pending changes"}
+                  className="admin-sidebar-action"
+                  disabled={!pendingActionCount || actionBusy}
+                  onClick={() => commitOutcomeUnknown ? allowCommitRetry() : setCommitPromptOpen(true)}
+                  title={actionBusy ? "Committing changes" : commitOutcomeUnknown ? "Review uncertain commit" : pendingActionCount ? "Commit changes" : "No pending changes"}
+                  type="button"
+                >
+                  {actionBusy ? <LoaderCircle className="admin-spinning" size={16} /> : <GitCommitHorizontal size={16} />}
+                </button>
+              )}
+            </div>
+          </div>
+          <button
+            aria-label="Resize sidebar"
+            aria-orientation="vertical"
+            aria-valuemax={480}
+            aria-valuemin={220}
+            aria-valuenow={sidebarWidth}
+            className="admin-sidebar-resize"
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft") setSidebarWidth((width) => Math.max(220, width - 16));
+              if (event.key === "ArrowRight") setSidebarWidth((width) => Math.min(480, width + 16));
+            }}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              if (event.buttons !== 1) return;
+              setSidebarWidth(Math.min(480, Math.max(220, event.clientX)));
+            }}
+            onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
+            role="separator"
+            tabIndex={0}
+            title="Drag to resize sidebar"
+            type="button"
+          />
+        </aside>
+      )}
 
       <section className="admin-workspace">
+        {!sidebarOpen && (
+          <div className="admin-sidebar-open-row">
+            <button
+              aria-label="Open sidebar"
+              className="admin-sidebar-open"
+              onClick={() => setSidebarOpen(true)}
+              title="Open sidebar"
+              type="button"
+            >
+              <FolderKanban size={16} />
+            </button>
+            {authenticated && (
+              <button
+                aria-label={actionBusy ? "Committing changes" : commitOutcomeUnknown ? "Review uncertain commit" : pendingActionCount ? "Commit changes" : "No pending changes"}
+                className="admin-sidebar-action"
+                disabled={!pendingActionCount || actionBusy}
+                onClick={() => commitOutcomeUnknown ? allowCommitRetry() : setCommitPromptOpen(true)}
+                title={actionBusy ? "Committing changes" : commitOutcomeUnknown ? "Review uncertain commit" : pendingActionCount ? "Commit changes" : "No pending changes"}
+                type="button"
+              >
+                {actionBusy ? <LoaderCircle className="admin-spinning" size={16} /> : <GitCommitHorizontal size={16} />}
+              </button>
+            )}
+          </div>
+        )}
         {!authenticated ? (
           <div className="admin-auth-wrap">
             <form className="admin-auth-card" onSubmit={(event) => void login(event)}>
@@ -1875,12 +3104,28 @@ export function AdminPage() {
             <section className="admin-panel admin-detail-panel">
               {dataLoading ? (
                 <div className="admin-detail-empty"><LoaderCircle className="admin-spinning" size={22} /><strong>Loading records</strong></div>
+              ) : section === "media" ? (
+                selectedMedia ? (
+                  <MediaLibraryDetail
+                    asset={selectedMedia}
+                    projects={selectedMediaProjects}
+                    pendingUploads={pendingUploads}
+                  />
+                ) : (
+                  <div className="admin-detail-empty">
+                    <div>{mediaLibraryLoading ? <LoaderCircle className="admin-spinning" size={21} /> : <FileImage size={21} />}</div>
+                    <strong>{mediaLibraryLoading ? "Loading media" : mediaLibraryError ? "Unable to load media" : "Choose a media file"}</strong>
+                    <span>{mediaLibraryError || "Select a file in the sidebar to preview it and see the projects that use it."}</span>
+                  </div>
+                )
               ) : editor?.table === "projects" ? (
                   <ProjectEditor
                     key={editor.key}
                     initial={editor.record}
                     isNew={editor.operation === "insert"}
                     pendingUploads={pendingUploads}
+                    contributors={availableContributors}
+                    onCreateContributor={createContributor}
                     onChange={(record) => saveRecord("projects", editor.key, editor.operation, record)}
                     onBrowseMedia={(onPick) => setMediaPicker(() => onPick)}
                   />
@@ -1890,9 +3135,18 @@ export function AdminPage() {
                     initial={editor.record}
                     isNew={editor.operation === "insert"}
                     projects={availableProjects}
-                    pendingUploads={pendingUploads}
+                    contributors={availableContributors}
+                    onCreateContributor={createContributor}
                     onChange={(record) => saveRecord("project_changelogs", editor.key, editor.operation, record)}
-                    onBrowseMedia={(onPick) => setMediaPicker(() => onPick)}
+                  />
+                ) : editor?.table === "contributors" ? (
+                  <ContributorEditor
+                    key={editor.key}
+                    initial={editor.record}
+                    isNew={editor.operation === "insert"}
+                    projects={availableProjects}
+                    changelogs={availableChangelogs}
+                    onChange={(record) => saveRecord("contributors", editor.key, editor.operation, record)}
                   />
                 ) : (
                   <div className="admin-detail-empty">
@@ -1903,32 +3157,6 @@ export function AdminPage() {
                 )}
             </section>
 
-            <footer className="admin-commit-bar">
-              <div className="admin-commit-summary">
-                <span className={`admin-change-count${stagedCount ? " has-changes" : ""}`}>{stagedCount}</span>
-                <span><strong>{stagedCount ? "staged changes" : "No pending changes"}</strong><small>Edits stay local until committed</small></span>
-              </div>
-              {stagedCount > 0 && (
-                <details className="admin-change-review">
-                  <summary>Review changes</summary>
-                  <div className="admin-change-review-list">
-                    {[...staged.values()].map((change) => (
-                      <div key={stageKey(change)}>
-                        <span>{stageDescription(change)}</span>
-                        <button type="button" onClick={() => removeStagedChange(change)} aria-label={`Discard ${change.label}`}><X size={15} /></button>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              )}
-              <div className="admin-commit-actions">
-                {stagedCount > 0 && <button className="admin-button admin-button-quiet" type="button" onClick={discardAll} disabled={actionBusy}>Discard all</button>}
-                <button className="admin-button admin-button-primary" type="button" disabled={!stagedCount || actionBusy} onClick={() => commitOutcomeUnknown ? allowCommitRetry() : setCommitPromptOpen(true)}>
-                  {actionBusy ? <LoaderCircle className="admin-spinning" size={16} /> : <Check size={16} />}
-                  {actionBusy ? "Committing…" : commitOutcomeUnknown ? "Review uncertain commit" : "Commit changes"}
-                </button>
-              </div>
-            </footer>
           </>
         )}
       </section>
@@ -1950,9 +3178,16 @@ export function AdminPage() {
             role="dialog"
           >
             <h2 id="admin-commit-title">Commit changes?</h2>
-            <p>
-              Commit {stagedCount} staged change{stagedCount === 1 ? "" : "s"} to the database in one transaction.
-            </p>
+            {stagedCount > 0 && (
+              <p>
+                Commit {stagedCount} staged database change{stagedCount === 1 ? "" : "s"} in one transaction.
+              </p>
+            )}
+            {pendingMediaDeletionPaths.size > 0 && (
+              <p>
+                Delete or retry deletion of {pendingMediaDeletionPaths.size} media file{pendingMediaDeletionPaths.size === 1 ? "" : "s"} from Storage after confirming no project uses them.
+              </p>
+            )}
             <div className="admin-confirm-actions">
               <button
                 className="admin-button admin-button-quiet"
@@ -1986,10 +3221,72 @@ export function AdminPage() {
             <h2 id="admin-delete-title">Stage this deletion?</h2>
             <p>
               “{getDisplayName(deleteTarget.table, deleteTarget.row.record)}” will be marked for deletion. It will not be removed from the database until you commit.
+              {deleteTarget.table === "contributors" && (() => {
+                const contributorId = (deleteTarget.row.record as ProjectContributor).id;
+                const projectCount = projects.filter((project) =>
+                  project.contributors?.some((contributor) => contributor.id === contributorId),
+                ).length;
+                const changelogCount = changelogs.filter((changelog) =>
+                  changelog.contributors?.some((contributor) => contributor.id === contributorId),
+                ).length;
+                return (
+                  <> Its project and changelog assignments ({projectCount} projects, {changelogCount} changelogs) will also be removed.</>
+                );
+              })()}
             </p>
             <div className="admin-confirm-actions">
               <button className="admin-button admin-button-quiet" onClick={() => setDeleteTarget(null)} type="button">Cancel</button>
               <button className="admin-button admin-button-danger" onClick={confirmDelete} type="button">Stage removal</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {authenticated && mediaDeleteTarget && (
+        <div
+          className="admin-dialog-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !actionBusy) {
+              setMediaDeleteTarget(null);
+            }
+          }}
+        >
+          <section
+            aria-labelledby="admin-media-delete-title"
+            aria-modal="true"
+            className="admin-confirm-dialog"
+            role="dialog"
+          >
+            <h2 id="admin-media-delete-title">Delete this media?</h2>
+            <p>
+              “{mediaDeleteTarget.name}” will be removed from Storage and unlinked from{" "}
+              {availableProjects.filter((project) =>
+                projectUsesStorageMedia(
+                  project,
+                  mediaDeleteTarget.path,
+                  availableChangelogs,
+                ),
+              ).length}{" "}
+              project(s). The removal is staged and takes effect when you commit.
+            </p>
+            <div className="admin-confirm-actions">
+              <button
+                className="admin-button admin-button-quiet"
+                disabled={actionBusy}
+                onClick={() => setMediaDeleteTarget(null)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="admin-button admin-button-danger"
+                disabled={actionBusy}
+                onClick={confirmMediaDelete}
+                type="button"
+              >
+                Stage deletion
+              </button>
             </div>
           </section>
         </div>
@@ -2021,7 +3318,11 @@ export function AdminPage() {
               <p>
                 You have {stagedCount} staged change{stagedCount === 1 ? "" : "s"}. Commit them before opening{" "}
                 <strong>{pendingNavigation.operation === "insert"
-                  ? pendingNavigation.table === "projects" ? "a new project" : "a new changelog"
+                  ? pendingNavigation.table === "projects"
+                    ? "a new project"
+                    : pendingNavigation.table === "project_changelogs"
+                      ? "a new changelog"
+                      : "a new contributor"
                   : getDisplayName(pendingNavigation.table, pendingNavigation.record)}</strong>,
                 or discard them and continue.
               </p>
@@ -2092,6 +3393,12 @@ type EditorState =
       key: string;
       operation: Operation;
       record: ChangelogDraft;
+    }
+  | {
+      table: "contributors";
+      key: string;
+      operation: Operation;
+      record: ContributorDraft;
     };
 
 type PendingNavigation = EditorState;

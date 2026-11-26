@@ -14,7 +14,6 @@ create table if not exists public.projects (
   description jsonb not null default '{"en": "", "zh": ""}'::jsonb,
   framework text[] null,
   keyword text[] null,
-  contributors jsonb null,
   primary_media text null,
   media jsonb not null default '[]'::jsonb,
   url text null,
@@ -28,12 +27,41 @@ create table if not exists public.project_changelogs (
   project_id uuid not null references public.projects(id) on delete cascade,
   title text not null,
   version text not null,
-  release text not null check (release in ('stable', 'latest', 'pre-release')),
+  release text not null check (release in ('latest', 'pre-release', 'none')),
   description jsonb not null default '{"en": "", "zh": ""}'::jsonb,
-  contributors jsonb null,
   media jsonb not null default '[]'::jsonb,
   released_at timestamptz not null default now()
 );
+
+create table if not exists public.contributors (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (btrim(name) <> ''),
+  url text null,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists contributors_name_url_unique
+  on public.contributors (lower(btrim(name)), btrim(coalesce(url, '')));
+
+create table if not exists public.project_contributors (
+  project_id uuid not null references public.projects(id) on delete cascade,
+  contributor_id uuid not null references public.contributors(id) on delete cascade,
+  position integer not null default 0,
+  primary key (project_id, contributor_id)
+);
+
+create index if not exists project_contributors_contributor_id_idx
+  on public.project_contributors (contributor_id);
+
+create table if not exists public.changelog_contributors (
+  changelog_id uuid not null references public.project_changelogs(id) on delete cascade,
+  contributor_id uuid not null references public.contributors(id) on delete cascade,
+  position integer not null default 0,
+  primary key (changelog_id, contributor_id)
+);
+
+create index if not exists changelog_contributors_contributor_id_idx
+  on public.changelog_contributors (contributor_id);
 
 alter table public.project_changelogs
   add column if not exists title text;
@@ -43,64 +71,34 @@ where title is null or btrim(title) = '';
 alter table public.project_changelogs
   alter column title set not null;
 alter table public.project_changelogs
-  add column if not exists contributors jsonb;
-update public.project_changelogs as changelog
-set contributors = parent_project.contributors
-from public.projects as parent_project
-where changelog.project_id = parent_project.id
-  and changelog.contributors is null
-  and jsonb_typeof(parent_project.contributors) = 'array';
-alter table public.project_changelogs
   drop column if exists framework;
 
-update public.projects as source
-set contributors = (
-  select coalesce(
-    jsonb_agg(
-      jsonb_strip_nulls(jsonb_build_object(
-        'name', btrim(item.value ->> 'name'),
-        'url', case
-          when jsonb_typeof(item.value -> 'url') = 'string'
-            then nullif(btrim(item.value ->> 'url'), '')
-          else null
-        end
-      ))
-      order by item.ordinality
-    ) filter (
-      where jsonb_typeof(item.value -> 'name') = 'string'
-        and nullif(btrim(item.value ->> 'name'), '') is not null
-    ),
-    '[]'::jsonb
-  )
-  from jsonb_array_elements(source.contributors) with ordinality as item(value, ordinality)
-)
-where jsonb_typeof(source.contributors) = 'array';
+create or replace function public.prevent_changelog_project_reassignment()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.project_id is distinct from old.project_id then
+    raise exception 'A changelog cannot be moved to another project after creation.';
+  end if;
 
-update public.project_changelogs as source
-set contributors = (
-  select coalesce(
-    jsonb_agg(
-      jsonb_strip_nulls(jsonb_build_object(
-        'name', btrim(item.value ->> 'name'),
-        'url', case
-          when jsonb_typeof(item.value -> 'url') = 'string'
-            then nullif(btrim(item.value ->> 'url'), '')
-          else null
-        end
-      ))
-      order by item.ordinality
-    ) filter (
-      where jsonb_typeof(item.value -> 'name') = 'string'
-        and nullif(btrim(item.value ->> 'name'), '') is not null
-    ),
-    '[]'::jsonb
-  )
-  from jsonb_array_elements(source.contributors) with ordinality as item(value, ordinality)
-)
-where jsonb_typeof(source.contributors) = 'array';
+  return new;
+end;
+$$;
+
+revoke all on function public.prevent_changelog_project_reassignment() from public, anon, authenticated;
+
+drop trigger if exists project_changelogs_prevent_project_reassignment on public.project_changelogs;
+create trigger project_changelogs_prevent_project_reassignment
+  before update of project_id on public.project_changelogs
+  for each row execute function public.prevent_changelog_project_reassignment();
 
 alter table public.projects enable row level security;
 alter table public.project_changelogs enable row level security;
+alter table public.contributors enable row level security;
+alter table public.project_contributors enable row level security;
+alter table public.changelog_contributors enable row level security;
 
 insert into storage.buckets (id, name, public)
 values ('project-media', 'project-media', true)

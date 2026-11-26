@@ -19,8 +19,7 @@ import type {
   ProjectContributor,
 } from "../types/projects";
 
-const releaseClass: Record<ProjectChangelog["release"], string> = {
-  stable: "border-blue-200 bg-blue-50 text-blue-700",
+const releaseClass: Record<Exclude<ProjectChangelog["release"], "none">, string> = {
   latest: "border-emerald-200 bg-emerald-50 text-emerald-700",
   "pre-release": "border-amber-200 bg-amber-50 text-amber-700",
 };
@@ -49,7 +48,7 @@ const detailText = {
     changelog: "Changelog",
     notFound: "Project not found",
     notFoundDescription: "This project may have moved or is not publicly available.",
-    releases: { stable: "Stable", latest: "Latest", "pre-release": "Pre-release" },
+    releases: { latest: "Latest", "pre-release": "Pre-release" },
   },
   zh: {
     back: "返回项目列表",
@@ -72,7 +71,7 @@ const detailText = {
     changelog: "更新日志",
     notFound: "未找到项目",
     notFoundDescription: "该项目可能已移动或当前未公开。",
-    releases: { stable: "稳定版", latest: "最新版本", "pre-release": "预发布" },
+    releases: { latest: "最新版本", "pre-release": "预发布" },
   },
 } as const;
 
@@ -496,7 +495,7 @@ function ProjectMetadata({
               <span className="text-sm font-medium text-[#1a1918]">
                 {latestRelease.title || latestRelease.version}
               </span>
-              {latestRelease.release && (
+              {latestRelease.release !== "none" && (
                 <span
                   className={`rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${
                     releaseClass[latestRelease.release]
@@ -627,9 +626,11 @@ function ProjectChangelogList({
                 <h3 className="min-w-0 break-words text-base font-semibold leading-snug text-[#1a1918]">
                   {openEntry.title || openEntry.version}
                 </h3>
-                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${releaseClass[openEntry.release]}`}>
-                  {text.releases[openEntry.release]}
-                </span>
+                {openEntry.release !== "none" && (
+                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${releaseClass[openEntry.release]}`}>
+                    {text.releases[openEntry.release]}
+                  </span>
+                )}
               </div>
               <span className="shrink-0 text-right text-xs font-medium text-[#76777c]">
                 {openEntry.version}

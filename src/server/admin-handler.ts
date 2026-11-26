@@ -6,6 +6,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { basename, dirname, extname } from "node:path";
+import { attachContributorAssignments } from "./contributor-data";
 
 interface AdminRequest extends AsyncIterable<Uint8Array> {
   method?: string;
@@ -235,6 +236,58 @@ function validateStoragePath(path: unknown): path is string {
   );
 }
 
+function validateMediaObjectPath(path: unknown): path is string {
+  return (
+    typeof path === "string" &&
+    path.length <= 1024 &&
+    !path.startsWith("/") &&
+    !path.includes("\\") &&
+    path.split("/").every((segment) => segment && segment !== "." && segment !== "..")
+  );
+}
+
+function storageObjectPathFromUrl(value: string): string | null {
+  try {
+    const pathname = new URL(value).pathname;
+    const prefix = "/storage/v1/object/public/project-media/";
+    const prefixIndex = pathname.indexOf(prefix);
+    if (prefixIndex < 0) return null;
+    return pathname
+      .slice(prefixIndex + prefix.length)
+      .split("/")
+      .map((segment) => decodeURIComponent(segment))
+      .join("/");
+  } catch {
+    return null;
+  }
+}
+
+function collectStorageReferences(
+  value: unknown,
+  candidates: Set<string>,
+  matches: Set<string>,
+): void {
+  if (typeof value === "string") {
+    const directPath = storageObjectPathFromUrl(value);
+    if (directPath && candidates.has(directPath)) matches.add(directPath);
+    const urls = value.match(/https?:\/\/[^\s<>"'`)\]]+/g) ?? [];
+    for (const url of urls) {
+      const path = storageObjectPathFromUrl(url.replace(/[.,!?;:]+$/, ""));
+      if (path && candidates.has(path)) matches.add(path);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectStorageReferences(item, candidates, matches));
+    return;
+  }
+  if (value && typeof value === "object") {
+    Object.values(value).forEach((item) =>
+      collectStorageReferences(item, candidates, matches),
+    );
+  }
+}
+
 function getSupabase(env: Environment) {
   const url = env.SUPABASE_URL;
   const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;
@@ -248,7 +301,7 @@ function getSupabase(env: Environment) {
 
 async function getAllRows(
   supabase: ReturnType<typeof getSupabase>,
-  table: "projects" | "project_changelogs",
+  table: "projects" | "project_changelogs" | "contributors",
 ): Promise<unknown[]> {
   const rows: unknown[] = [];
   const pageSize = 500;
@@ -256,8 +309,12 @@ async function getAllRows(
     const query = supabase
       .from(table)
       .select("*")
-      .order(table === "projects" ? "sort_order" : "released_at", {
-        ascending: table === "projects",
+      .order(table === "projects"
+        ? "sort_order"
+        : table === "project_changelogs"
+          ? "released_at"
+          : "name", {
+        ascending: table !== "project_changelogs",
       })
       .range(offset, offset + pageSize - 1);
     const { data, error } = await query;
@@ -265,6 +322,18 @@ async function getAllRows(
     rows.push(...(data ?? []));
     if (!data || data.length < pageSize) return rows;
   }
+}
+
+async function getRowsWithContributors(
+  supabase: ReturnType<typeof getSupabase>,
+  table: "projects" | "project_changelogs",
+): Promise<unknown[]> {
+  const rows = await getAllRows(supabase, table) as Array<{ id: string }>;
+  return attachContributorAssignments(
+    supabase,
+    rows,
+    table === "projects" ? "project" : "changelog",
+  );
 }
 
 function getFileName(value: unknown): string | null {
@@ -292,7 +361,7 @@ function isCommitChange(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const change = value as Record<string, unknown>;
   if (
-    !["projects", "project_changelogs"].includes(String(change.table)) ||
+    !["projects", "project_changelogs", "contributors"].includes(String(change.table)) ||
     !["insert", "update", "delete"].includes(String(change.operation))
   ) {
     return false;
@@ -380,12 +449,17 @@ export async function handleAdminRequest(
     const supabase = getSupabase(env);
 
     if (method === "GET" && action === "/projects") {
-      respond(response, 200, await getAllRows(supabase, "projects"));
+      respond(response, 200, await getRowsWithContributors(supabase, "projects"));
       return;
     }
 
     if (method === "GET" && action === "/changelogs") {
-      respond(response, 200, await getAllRows(supabase, "project_changelogs"));
+      respond(response, 200, await getRowsWithContributors(supabase, "project_changelogs"));
+      return;
+    }
+
+    if (method === "GET" && action === "/contributors") {
+      respond(response, 200, await getAllRows(supabase, "contributors"));
       return;
     }
 
@@ -517,6 +591,59 @@ export async function handleAdminRequest(
         respond(response, 400, { error: "Invalid media cleanup request." });
         return;
       }
+      for (let offset = 0; offset < paths.length; offset += 100) {
+        const { error } = await supabase.storage
+          .from(storageBucket)
+          .remove(paths.slice(offset, offset + 100));
+        if (error) throw error;
+      }
+      respond(response, 200, { removed: paths.length });
+      return;
+    }
+
+    if (method === "POST" && action === "/media/delete") {
+      const body = await readJsonBody(request);
+      const paths =
+        body && typeof body === "object" && !Array.isArray(body)
+          ? (body as Record<string, unknown>).paths
+          : null;
+      if (
+        !Array.isArray(paths) ||
+        paths.length === 0 ||
+        paths.length > 1000 ||
+        !paths.every(validateMediaObjectPath)
+      ) {
+        respond(response, 400, { error: "Invalid media deletion request." });
+        return;
+      }
+
+      const pathSet = new Set(paths);
+      const [projectRowsUnknown, changelogRowsUnknown] = await Promise.all([
+        getAllRows(supabase, "projects"),
+        getAllRows(supabase, "project_changelogs"),
+      ]);
+      const projectRows = projectRowsUnknown as Array<{
+        primary_media?: unknown;
+        media?: unknown;
+        description?: unknown;
+      }>;
+      const changelogRows = changelogRowsUnknown as Array<{ description?: unknown }>;
+      const referencedPaths = new Set<string>();
+      for (const project of projectRows) {
+        collectStorageReferences(project.primary_media, pathSet, referencedPaths);
+        collectStorageReferences(project.media, pathSet, referencedPaths);
+        collectStorageReferences(project.description, pathSet, referencedPaths);
+      }
+      for (const changelog of changelogRows) {
+        collectStorageReferences(changelog.description, pathSet, referencedPaths);
+      }
+      if (referencedPaths.size > 0) {
+        respond(response, 409, {
+          error: `Media is still referenced by project data: ${[...referencedPaths].join(", ")}`,
+        });
+        return;
+      }
+
       for (let offset = 0; offset < paths.length; offset += 100) {
         const { error } = await supabase.storage
           .from(storageBucket)

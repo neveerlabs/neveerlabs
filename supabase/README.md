@@ -6,7 +6,7 @@ Dokumen ini menjelaskan cara menyiapkan Supabase, mengisi proyek melalui Table E
 
 Untuk **project Supabase baru**, jalankan `schema.sql`, lalu `commit_manager.sql` di SQL Editor. `schema.sql` menyiapkan tabel `projects` dan `project_changelogs`, bucket publik `project-media`, serta aturan akses dan pemicu penghapusan media. Ekstensi `pg_net` dan schema `vault` juga disiapkan. `commit_manager.sql` memasang fungsi commit atomik yang hanya dapat dipanggil dengan role `service_role`.
 
-Untuk **database yang sudah digunakan**, jangan jalankan file setup ini secara otomatis. File migrasi historis tidak lagi disertakan di repo; database lama yang belum memakai skema terkini perlu diperbarui secara terencana, bukan dengan menjalankan `schema.sql` secara langsung.
+Untuk **database yang sudah digunakan**, jangan jalankan file setup ini secara otomatis. Jalankan migrasi yang belum diterapkan di SQL Editor sesuai urutan nama file: `migrations/20261126210613_prevent_changelog_project_reassignment.sql`, lalu `migrations/20261126214620_changelog_release_values.sql`. Migrasi status release mengubah nilai lama `stable` menjadi `latest` tanpa menghapus baris changelog.
 
 ## 2. Tambahkan proyek melalui Table Editor
 
@@ -40,13 +40,13 @@ Hanya proyek dengan `visibility` bernilai `public` yang dikirim API. Tabel `proj
 
 Di **Table Editor → `public.project_changelogs` → Add new row**, isi:
 
-- `project_id`: salin nilai `id` dari baris proyek yang ingin diperbarui.
+- `project_id`: salin nilai `id` project pemilik changelog. Relasi ini tetap dan tidak dapat diubah setelah changelog dibuat.
 - `title`: judul rilis, misalnya `Initial release`.
 - `version`: misalnya `v1.0.0`.
-- `release`: salah satu `stable`, `latest`, atau `pre-release`.
+- `release`: salah satu `latest`, `pre-release`, atau `none`.
 - `description`: JSON bilingual; isi mendukung Markdown/GFM dan HTML yang disanitasi. Markdown image muncul sesuai posisi di source, sedangkan HTML/CSS inline dapat mengatur posisi dan ukuran media.
 - `contributors`: array JSON, misalnya `[{"name":"Nama","url":"https://example.com"}]`, atau `[]`. URL opsional.
-- `media`: array JSON berisi URL media rilis yang dikelola di Storage, atau gunakan `[]`. Untuk menampilkan gambar/video di changelog, sisipkan media pada `description` dengan Markdown atau HTML.
+- Media changelog terpisah tidak digunakan. Untuk menampilkan gambar/video, sisipkan URL media pada `description` dengan Markdown atau HTML; jangan mengisi kolom `media` legacy jika masih ada di database.
 - `released_at`: gunakan waktu bawaan.
 
 Contoh media rata tengah dengan ukuran yang diatur dari deskripsi:

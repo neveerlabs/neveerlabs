@@ -1,6 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { Project } from "../src/types/projects";
+import { attachContributorAssignments } from "../src/server/contributor-data";
 
 interface ApiRequest {
   method?: string;
@@ -70,9 +71,19 @@ export async function handleProjectsRequest(
         .order("released_at", { ascending: false });
 
       if (changelogError) throw changelogError;
+      const [projectWithContributors] = await attachContributorAssignments(
+        supabase,
+        [project],
+        "project",
+      );
+      const changelogsWithContributors = await attachContributorAssignments(
+        supabase,
+        changelogs ?? [],
+        "changelog",
+      );
       response.status(200).json({
-        ...project,
-        changelogs: changelogs ?? [],
+        ...projectWithContributors,
+        changelogs: changelogsWithContributors,
       } satisfies Project);
       return;
     }
@@ -100,15 +111,25 @@ export async function handleProjectsRequest(
 
     if (changelogError) throw changelogError;
 
+    const projectsWithContributors = await attachContributorAssignments(
+      supabase,
+      projectRows,
+      "project",
+    );
+    const changelogsWithContributors = await attachContributorAssignments(
+      supabase,
+      changelogs ?? [],
+      "changelog",
+    );
     const changelogsByProject = new Map<string, Project["changelogs"]>();
-    for (const changelog of changelogs ?? []) {
+    for (const changelog of changelogsWithContributors) {
       const rows = changelogsByProject.get(changelog.project_id) ?? [];
       rows.push(changelog);
       changelogsByProject.set(changelog.project_id, rows);
     }
 
     response.status(200).json(
-      projectRows.map((project) => ({
+      projectsWithContributors.map((project) => ({
         ...project,
         changelogs: changelogsByProject.get(project.id) ?? [],
       })) satisfies Project[],

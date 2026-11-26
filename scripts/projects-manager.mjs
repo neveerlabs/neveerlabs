@@ -13,6 +13,7 @@ const storageBucket = "project-media";
 const tableNames = {
   projects: "projects",
   changelogs: "project_changelogs",
+  contributors: "contributors",
 };
 const platformValues = [
   "web",
@@ -21,7 +22,7 @@ const platformValues = [
   "cli",
   "other",
 ];
-const releaseValues = ["stable", "latest", "pre-release"];
+const releaseValues = ["latest", "pre-release", "none"];
 const pendingPrefix = "__neverlabs_pending_upload__:";
 const maxPageSize = 50;
 
@@ -82,26 +83,6 @@ function displayMediaReference(reference) {
     return decodeURIComponent(basename(new URL(reference).pathname));
   } catch {
     return reference;
-  }
-}
-
-function validateJsonArray(value, itemValidator) {
-  return value === null ||
-    (Array.isArray(value) && value.every(itemValidator));
-}
-
-async function askJson(label, currentValue, validate, expected) {
-  while (true) {
-    const answer = await ask(`${label} JSON (Enter untuk tetap): `);
-    if (!answer) return currentValue;
-
-    try {
-      const value = JSON.parse(answer);
-      if (validate(value)) return value;
-      console.log(`Format tidak sesuai. ${expected}`);
-    } catch {
-      console.log("JSON tidak valid. Periksa tanda kutip dan kurungnya.");
-    }
   }
 }
 
@@ -166,31 +147,59 @@ async function askInteger(label, current) {
   }
 }
 
-function validateContributors(value) {
-  return validateJsonArray(
-    value,
-    (item) =>
-      item !== null &&
-      typeof item === "object" &&
-      !Array.isArray(item) &&
-      typeof item.name === "string" &&
-      item.name.trim().length > 0 &&
-      Object.keys(item).every((key) => key === "name" || key === "url") &&
-      (item.url === undefined || item.url === null || typeof item.url === "string"),
-  );
-}
-
 async function fetchPage(table, offset) {
-  const orderColumn = table === tableNames.projects ? "created_at" : "released_at";
+  const orderColumn = table === tableNames.projects
+    ? "created_at"
+    : table === tableNames.changelogs
+      ? "released_at"
+      : "name";
   const { data, error } = await supabase
     .from(table)
     .select("*")
-    .order(orderColumn, { ascending: false })
+    .order(orderColumn, { ascending: table === tableNames.contributors })
     .order("id", { ascending: true })
     .range(offset, offset + maxPageSize - 1);
 
   if (error) throw new Error(error.message);
   return data ?? [];
+}
+
+async function hydrateContributors(table, rows) {
+  if (rows.length === 0 || table === tableNames.contributors) return rows;
+  const relationTable = table === tableNames.projects
+    ? "project_contributors"
+    : "changelog_contributors";
+  const parentColumn = table === tableNames.projects ? "project_id" : "changelog_id";
+  const parentIds = rows.map((row) => row.id);
+  const { data: assignments, error: assignmentError } = await supabase
+    .from(relationTable)
+    .select(`${parentColumn}, contributor_id, position`)
+    .in(parentColumn, parentIds)
+    .order("position", { ascending: true });
+  if (assignmentError) throw new Error(assignmentError.message);
+
+  const contributorIds = [...new Set((assignments ?? []).map((item) => item.contributor_id))];
+  if (contributorIds.length === 0) {
+    return rows.map((row) => ({ ...row, contributors: [] }));
+  }
+  const { data: contributors, error: contributorError } = await supabase
+    .from(tableNames.contributors)
+    .select("id, name, url")
+    .in("id", contributorIds);
+  if (contributorError) throw new Error(contributorError.message);
+  const contributorsById = new Map((contributors ?? []).map((item) => [item.id, item]));
+  const byParent = new Map();
+  for (const assignment of assignments ?? []) {
+    const contributor = contributorsById.get(assignment.contributor_id);
+    if (!contributor) continue;
+    const list = byParent.get(assignment[parentColumn]) ?? [];
+    list.push(contributor);
+    byParent.set(assignment[parentColumn], list);
+  }
+  return rows.map((row) => ({
+    ...row,
+    contributors: byParent.get(row.id) ?? [],
+  }));
 }
 
 async function getWorkingRows(table) {
@@ -203,6 +212,10 @@ async function getWorkingRows(table) {
     if (rows.length < maxPageSize) break;
     offset += maxPageSize;
   }
+
+  const hydratedRows = await hydrateContributors(table, [...rowsById.values()]);
+  rowsById.clear();
+  for (const row of hydratedRows) rowsById.set(row.id, row);
 
   for (const change of staged.values()) {
     if (change.table !== table) continue;
@@ -229,12 +242,14 @@ function getProjectMediaCount(record) {
 }
 
 function rowTitle(table, row) {
-  return table === tableNames.projects
-    ? row.name
-    : `${row.title} · ${row.version}`;
+  if (table === tableNames.projects || table === tableNames.contributors) return row.name;
+  return `${row.title} · ${row.version}`;
 }
 
 function rowSummary(table, row, projectNames) {
+  if (table === tableNames.contributors) {
+    return `${row.name} · ${row.url || "tanpa URL kontak"} · ${projectNames.get(row.id) ?? "0 project · 0 changelog"}`;
+  }
   if (table === tableNames.projects) {
     const platform = row.platform ?? "platform belum diatur";
     const visibility = row.visibility ?? "tanpa visibility";
@@ -242,11 +257,15 @@ function rowSummary(table, row, projectNames) {
   }
 
   const projectName = projectNames.get(row.project_id) ?? "proyek tidak tersedia";
-  return `${row.title} · ${row.version} · ${row.release} · ${projectName} · ${row.media?.length ?? 0} media`;
+  return `${row.title} · ${row.version} · ${row.release} · ${projectName}`;
 }
 
 function printRows(table, rows, projectNames = new Map()) {
-  const title = table === tableNames.projects ? "Projects" : "Changelogs";
+  const title = table === tableNames.projects
+    ? "Projects"
+    : table === tableNames.changelogs
+      ? "Changelogs"
+      : "Contributors";
   console.log(`\n${title} — ${rows.length} data · ${staged.size} perubahan tertunda`);
   if (rows.length === 0) {
     console.log("  Belum ada data.");
@@ -298,9 +317,30 @@ function printDescription(description) {
   printText("ZH", description?.zh);
 }
 
-function printRecordDetails(table, row, projectNames = new Map()) {
+async function printRecordDetails(table, row, projectNames = new Map()) {
   console.log(`\n${rowTitle(table, row)}`);
   console.log("─".repeat(Math.min(72, Math.max(24, rowTitle(table, row).length + 4))));
+
+  if (table === tableNames.contributors) {
+    console.log(`  URL kontak: ${row.url || "—"}`);
+    const [projects, changelogs] = await Promise.all([
+      getWorkingRows(tableNames.projects),
+      getWorkingRows(tableNames.changelogs),
+    ]);
+    const assignedProjects = projects.filter((project) =>
+      project.contributors?.some((contributor) => contributor.id === row.id),
+    );
+    const assignedChangelogs = changelogs.filter((changelog) =>
+      changelog.contributors?.some((contributor) => contributor.id === row.id),
+    );
+    console.log(`  Digunakan di ${assignedProjects.length} project dan ${assignedChangelogs.length} changelog:`);
+    for (const project of assignedProjects) console.log(`    - Project: ${project.name}`);
+    const projectNames = new Map(projects.map((project) => [project.id, project.name]));
+    for (const changelog of assignedChangelogs) {
+      console.log(`    - Changelog: ${changelog.title} · ${changelog.version} (${projectNames.get(changelog.project_id) ?? "project tidak tersedia"})`);
+    }
+    return;
+  }
 
   if (table === tableNames.projects) {
     console.log(`  Visibility: ${row.visibility ?? "—"} · Platform: ${row.platform ?? "—"}`);
@@ -333,7 +373,6 @@ function printRecordDetails(table, row, projectNames = new Map()) {
   } else {
     console.log("    —");
   }
-  printMedia("Media rilis", row.media);
   printDescription(row.description);
 }
 
@@ -345,11 +384,28 @@ function stageRecord(table, operation, record) {
   console.log(operation === "insert" ? "Data baru ditambahkan ke antrean." : "Perubahan ditambahkan ke antrean.");
 }
 
+function hasStagedContributorAssignments(contributorId) {
+  return [...staged.values()].some((change) => {
+    if (
+      (change.table !== tableNames.projects && change.table !== tableNames.changelogs) ||
+      change.operation === "delete" ||
+      !change.record
+    ) {
+      return false;
+    }
+    return change.record.contributors?.some((contributor) => contributor.id === contributorId) ?? false;
+  });
+}
+
 function stageDelete(table, record) {
   const { id } = record;
   const key = stageKey(table, id);
   const previous = staged.get(key);
   if (previous?.operation === "insert") {
+    if (table === tableNames.contributors && hasStagedContributorAssignments(id)) {
+      console.log("Hapus dulu kontributor ini dari project/changelog yang masih tertunda.");
+      return;
+    }
     staged.delete(key);
     if (table === tableNames.projects) {
       for (const [childKey, change] of staged) {
@@ -384,6 +440,72 @@ async function selectProjectId() {
     throw new Error("Nomor proyek tidak ditemukan.");
   }
   return rows[index - 1].id;
+}
+
+async function chooseContributors(current = []) {
+  let selected = [...current];
+  while (true) {
+    const available = await getWorkingRows(tableNames.contributors);
+    console.log("\nKontributor terpilih:");
+    if (selected.length === 0) console.log("  —");
+    selected.forEach((contributor) => console.log(`  - ${contributor.name}`));
+    console.log("\nDaftar kontributor (pilih nomor untuk tambah/hapus):");
+    if (available.length === 0) console.log("  Belum ada data kontributor.");
+    available.forEach((contributor, index) => {
+      const checked = selected.some((item) => item.id === contributor.id) ? "[x]" : "[ ]";
+      console.log(`  ${index + 1}. ${checked} ${contributor.name}`);
+    });
+    console.log("  [n] tambah kontributor baru  [d] selesai  [0] kosongkan pilihan");
+    const action = (await ask("Pilihan: ")).toLowerCase();
+    if (action === "d") return selected;
+    if (action === "0") {
+      selected = [];
+      continue;
+    }
+    if (action === "n") {
+      const name = await ask("Nama kontributor: ");
+      if (!name) {
+        console.log("Nama kontributor wajib diisi.");
+        continue;
+      }
+      let url = await askText("URL kontak (opsional; ketik null untuk kosong)", null, { nullable: true });
+      while (url && !safeHttpUrl(url)) {
+        console.log("URL harus menggunakan http atau https.");
+        url = await askText("URL kontak", url, { nullable: true });
+      }
+      const existing = available.find(
+        (item) => item.name.trim().toLocaleLowerCase() === name.trim().toLocaleLowerCase() &&
+          (item.url ?? null) === (url ?? null),
+      );
+      if (existing) {
+        console.log("Kontributor yang sama sudah ada; data yang ada dipilih.");
+        if (!selected.some((item) => item.id === existing.id)) selected.push(existing);
+      } else {
+        const contributor = { id: randomUUID(), name: name.trim(), url: url || null };
+        stageRecord(tableNames.contributors, "insert", contributor);
+        selected.push(contributor);
+      }
+      continue;
+    }
+    const index = Number(action);
+    if (!Number.isInteger(index) || index < 1 || index > available.length) {
+      console.log("Pilihan tidak dikenal.");
+      continue;
+    }
+    const contributor = available[index - 1];
+    selected = selected.some((item) => item.id === contributor.id)
+      ? selected.filter((item) => item.id !== contributor.id)
+      : [...selected, contributor];
+  }
+}
+
+function safeHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function safeFileName(filePath) {
@@ -586,12 +708,7 @@ async function createProject() {
     description: await askDescription(),
     framework: await askStringArray("Framework"),
     keyword: await askStringArray("Keyword"),
-    contributors: await askJson(
-      "Kontributor",
-      [],
-      validateContributors,
-      "Gunakan array objek dengan name dan url opsional, misalnya [{\"name\":\"Nama\",\"url\":\"https://...\"}].",
-    ),
+    contributors: await chooseContributors(),
     primary_media: null,
     media: [],
     url: null,
@@ -618,19 +735,38 @@ async function createChangelog() {
     version: await ask("Versi (misalnya v1.0.0): "),
     release: await askChoice("Jenis rilis", releaseValues, "latest"),
     description: await askDescription(),
-    contributors: await askJson(
-      "Kontributor rilis",
-      [],
-      validateContributors,
-      "Gunakan array objek dengan name dan url opsional, atau [].",
-    ),
-    media: [],
+    contributors: await chooseContributors(),
     released_at: new Date().toISOString(),
   };
   if (!record.title.trim()) throw new Error("Judul rilis wajib diisi.");
   if (!record.version.trim()) throw new Error("Versi wajib diisi.");
-  record.media = await chooseAssets("Media catatan rilis");
   stageRecord(tableNames.changelogs, "insert", record);
+}
+
+async function createContributor() {
+  const name = await ask("Nama kontributor: ");
+  if (!name) throw new Error("Nama kontributor wajib diisi.");
+  let url = await askText("URL kontak (opsional; ketik null untuk kosong)", null, { nullable: true });
+  while (url && !safeHttpUrl(url)) {
+    console.log("URL harus menggunakan http atau https.");
+    url = await askText("URL kontak", url, { nullable: true });
+  }
+  stageRecord(tableNames.contributors, "insert", {
+    id: randomUUID(),
+    name: name.trim(),
+    url: url || null,
+  });
+}
+
+async function editContributor(record) {
+  record.name = await askText("Nama", record.name);
+  if (!record.name.trim()) throw new Error("Nama kontributor wajib diisi.");
+  let url = await askText("URL kontak (opsional; ketik null untuk kosong)", record.url, { nullable: true });
+  while (url && !safeHttpUrl(url)) {
+    console.log("URL harus menggunakan http atau https.");
+    url = await askText("URL kontak", url, { nullable: true });
+  }
+  record.url = url || null;
 }
 
 async function editProject(record) {
@@ -663,12 +799,7 @@ async function editProject(record) {
         record.keyword = await askStringArray("Keyword", record.keyword);
         break;
       case "7":
-        record.contributors = await askJson(
-          "Kontributor",
-          record.contributors,
-          validateContributors,
-          "Gunakan array objek dengan name dan url opsional, atau [].",
-        );
+        record.contributors = await chooseContributors(record.contributors ?? []);
         break;
       case "8":
         await editProjectMedia(record);
@@ -691,48 +822,28 @@ async function editProject(record) {
 async function editChangelog(record) {
   while (true) {
     console.log("\nPilih yang ingin diedit:");
-    console.log("  1. Project       2. Judul       3. Versi");
-    console.log("  4. Jenis rilis   5. Deskripsi   6. Kontributor");
-    console.log("  7. Media         8. Tanggal rilis  0. Selesai");
+    console.log("  1. Judul         2. Versi       3. Jenis rilis");
+    console.log("  4. Deskripsi     5. Kontributor 6. Tanggal rilis");
     const action = await ask("Aksi: ");
     switch (action) {
       case "0":
         return;
       case "1":
-        {
-          const projectId = await selectProjectId();
-          if (projectId) record.project_id = projectId;
-        }
-        break;
-      case "2":
         record.title = await askText("Judul", record.title);
         break;
-      case "3":
+      case "2":
         record.version = await askText("Versi", record.version);
         break;
-      case "4":
+      case "3":
         record.release = await askChoice("Jenis rilis", releaseValues, record.release);
         break;
-      case "5":
+      case "4":
         record.description = await askDescription(record.description);
         break;
+      case "5":
+        record.contributors = await chooseContributors(record.contributors ?? []);
+        break;
       case "6":
-        record.contributors = await askJson(
-          "Kontributor",
-          record.contributors ?? [],
-          validateContributors,
-          "Gunakan array objek dengan name dan url opsional, atau [].",
-        );
-        break;
-      case "7":
-        record.media = await chooseAssets(
-          "Media catatan rilis",
-          Array.isArray(record.media)
-            ? record.media.filter((item) => typeof item === "string")
-            : [],
-        );
-        break;
-      case "8":
         record.released_at = await askText("Tanggal rilis (ISO timestamp)", record.released_at);
         break;
       default:
@@ -743,24 +854,26 @@ async function editChangelog(record) {
 
 async function createRecord(table) {
   if (table === tableNames.projects) await createProject();
-  else await createChangelog();
+  else if (table === tableNames.changelogs) await createChangelog();
+  else await createContributor();
 }
 
 async function updateRecord(table, row, projectNames) {
-  printRecordDetails(table, row, projectNames);
+  await printRecordDetails(table, row, projectNames);
   const original = JSON.stringify(row);
   if (table === tableNames.projects) await editProject(row);
-  else await editChangelog(row);
+  else if (table === tableNames.changelogs) await editChangelog(row);
+  else await editContributor(row);
   if (JSON.stringify(row) === original) {
     console.log("Tidak ada perubahan.");
     return;
   }
-  printRecordDetails(table, row, projectNames);
+  await printRecordDetails(table, row, projectNames);
   stageRecord(table, "update", row);
 }
 
 async function deleteRecord(table, row, projectNames) {
-  printRecordDetails(table, row, projectNames);
+  await printRecordDetails(table, row, projectNames);
   if ((await ask("Hapus data ini? [y/N]: ")).toLowerCase() !== "y") {
     console.log("Penghapusan dibatalkan.");
     return;
@@ -786,9 +899,24 @@ async function manageTable(table) {
   while (true) {
     try {
       const rows = await getWorkingRows(table);
-      const projectNames = table === tableNames.changelogs
-        ? new Map((await getWorkingRows(tableNames.projects)).map((project) => [project.id, project.name]))
-        : new Map();
+      let projectNames = new Map();
+      if (table === tableNames.changelogs) {
+        projectNames = new Map((await getWorkingRows(tableNames.projects)).map((project) => [project.id, project.name]));
+      } else if (table === tableNames.contributors) {
+        const [projects, changelogs] = await Promise.all([
+          getWorkingRows(tableNames.projects),
+          getWorkingRows(tableNames.changelogs),
+        ]);
+        for (const contributor of rows) {
+          const projectCount = projects.filter((project) =>
+            project.contributors?.some((item) => item.id === contributor.id),
+          ).length;
+          const changelogCount = changelogs.filter((changelog) =>
+            changelog.contributors?.some((item) => item.id === contributor.id),
+          ).length;
+          projectNames.set(contributor.id, `${projectCount} project · ${changelogCount} changelog`);
+        }
+      }
       printRows(table, rows, projectNames);
       const action = (await ask("Aksi: ")).toLowerCase();
 
@@ -804,7 +932,7 @@ async function manageTable(table) {
       }
       if (action.startsWith("v ")) {
         const row = getIndexedRow(rows, action, "v");
-        if (row) printRecordDetails(table, row, projectNames);
+        if (row) await printRecordDetails(table, row, projectNames);
         continue;
       }
       if (action.startsWith("e ")) {
@@ -836,7 +964,11 @@ function listStagedChanges() {
 function printStagedChanges(rows = listStagedChanges()) {
   console.log(`\nPerubahan tertunda (${rows.length}):`);
   rows.forEach((row, index) => {
-    const table = row.table === tableNames.projects ? "Project" : "Changelog";
+    const table = row.table === tableNames.projects
+      ? "Project"
+      : row.table === tableNames.changelogs
+        ? "Changelog"
+        : "Contributor";
     const operation = {
       insert: "baru",
       update: "edit",
@@ -858,6 +990,15 @@ async function reviewStagedChanges() {
       continue;
     }
     const row = rows[index - 1];
+    const change = staged.get(stageKey(row.table, row.id));
+    if (
+      row.table === tableNames.contributors &&
+      change?.operation === "insert" &&
+      hasStagedContributorAssignments(row.id)
+    ) {
+      console.log("Hapus dulu kontributor ini dari project/changelog yang masih tertunda.");
+      continue;
+    }
     staged.delete(stageKey(row.table, row.id));
     console.log("Perubahan dibuang dari antrean.");
   }
@@ -989,15 +1130,27 @@ async function commitChanges() {
       );
     }
 
-    const payload = changes.map((change) =>
-      change.operation === "delete"
-        ? { table: change.table, operation: change.operation, id: change.id }
-        : {
-            table: change.table,
-            operation: change.operation,
-            record: replacePendingReferences(change.record, uploadedUrls),
+    const payload = changes.map((change) => {
+      if (change.operation === "delete") {
+        return { table: change.table, operation: change.operation, id: change.id };
+      }
+      const record = replacePendingReferences(change.record, uploadedUrls);
+      if (change.table === tableNames.projects || change.table === tableNames.changelogs) {
+        return {
+          table: change.table,
+          operation: change.operation,
+          record: {
+            ...record,
+            contributors: (record.contributors ?? []).map((contributor) => contributor.id),
           },
-    );
+        };
+      }
+      return {
+        table: change.table,
+        operation: change.operation,
+        record,
+      };
+    });
     const { data, error } = await supabase.rpc("apply_projects_commit", {
       p_changes: payload,
     });
@@ -1050,8 +1203,9 @@ async function main() {
     console.log(`\nNeverlabs Projects Manager — perubahan tertunda: ${staged.size}`);
     console.log("1. Buka tabel projects");
     console.log("2. Buka tabel project_changelogs");
-    console.log("3. Tinjau/buang perubahan tertunda");
-    console.log("4. Commit semua perubahan");
+    console.log("3. Buka tabel contributors");
+    console.log("4. Tinjau/buang perubahan tertunda");
+    console.log("5. Commit semua perubahan");
     console.log("0. Keluar");
     const action = await ask("Pilih: ");
 
@@ -1063,8 +1217,9 @@ async function main() {
     }
     if (action === "1") await manageTable(tableNames.projects);
     else if (action === "2") await manageTable(tableNames.changelogs);
-    else if (action === "3") await reviewStagedChanges();
-    else if (action === "4") await commitChanges();
+    else if (action === "3") await manageTable(tableNames.contributors);
+    else if (action === "4") await reviewStagedChanges();
+    else if (action === "5") await commitChanges();
     else console.log("Pilihan tidak dikenal.");
   }
 }

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { handleAdminRequest } from "../admin-handler";
+import { handleAdminRequest } from "../../src/server/admin-handler";
 
 export default async function adminHandler(
   request: VercelRequest,
