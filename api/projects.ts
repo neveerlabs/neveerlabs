@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import type { Project } from "../src/types/projects";
-import { attachContributorAssignments } from "../src/server/contributor-data";
+import type { Project } from "../src/types/projects.js";
+import { attachContributorAssignments } from "../src/server/contributor-data.js";
 
 interface ApiRequest {
   method?: string;

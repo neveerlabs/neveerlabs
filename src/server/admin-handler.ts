@@ -6,7 +6,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { basename, dirname, extname } from "node:path";
-import { attachContributorAssignments } from "./contributor-data";
+import { attachContributorAssignments } from "./contributor-data.js";
 
 interface AdminRequest extends AsyncIterable<Uint8Array> {
   method?: string;

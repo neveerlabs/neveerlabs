@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { ProjectContributor } from "../types/projects";
+import type { ProjectContributor } from "../types/projects.js";
 
 type AssignmentKind = "project" | "changelog";
 
