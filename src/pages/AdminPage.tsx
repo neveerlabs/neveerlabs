@@ -66,6 +66,27 @@ interface VisibleRow {
   operation?: Operation;
 }
 
+function createUuid(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi.randomUUID === "function") {
+    return cryptoApi.randomUUID();
+  }
+
+  const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join("-");
+}
+
 function storageObjectPath(value: string | null): string | null {
   if (!value) return null;
   try {
@@ -367,7 +388,7 @@ function projectDraft(record?: ProjectRow): ProjectDraft {
         media: [...(record.media ?? [])],
       }
     : {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         name: "",
         visibility: "private",
         platform: "web",
@@ -393,7 +414,7 @@ function changelogDraft(record?: ProjectChangelog): ChangelogDraft {
         media: [...(record.media ?? [])],
       }
     : {
-        id: crypto.randomUUID(),
+        id: createUuid(),
         project_id: "",
         title: "",
         version: "",
@@ -408,7 +429,7 @@ function changelogDraft(record?: ProjectChangelog): ChangelogDraft {
 function contributorDraft(record?: ProjectContributor): ContributorDraft {
   return record
     ? { ...record }
-    : { id: crypto.randomUUID(), name: "", url: null };
+    : { id: createUuid(), name: "", url: null };
 }
 
 function stageKey(change: StagedChange): string {
@@ -1977,7 +1998,7 @@ export function AdminPage() {
   };
 
   const startNewRecord = (table: TableName, projectId?: string) => {
-    const key = `new:${crypto.randomUUID()}`;
+    const key = `new:${createUuid()}`;
     if (table === "projects") {
       requestEditorNavigation({ table, key, operation: "insert", record: projectDraft() });
     } else if (table === "project_changelogs") {
@@ -2128,7 +2149,7 @@ export function AdminPage() {
         (item.url ?? null) === (url ?? null),
     );
     if (existing) return existing;
-    const contributor = { id: crypto.randomUUID(), name, url };
+    const contributor = { id: createUuid(), name, url };
     saveRecord("contributors", contributor.id, "insert", contributorDraft(contributor));
     return contributor;
   };
@@ -2230,7 +2251,7 @@ export function AdminPage() {
         method: "POST",
         body: { name: file.name },
       });
-      const reference = `${pendingPrefix}${crypto.randomUUID()}`;
+      const reference = `${pendingPrefix}${createUuid()}`;
       prepared.set(reference, {
         file,
         path: result.path,
@@ -2570,7 +2591,7 @@ export function AdminPage() {
     const targetChange = staged.get(compoundKey(target.table, target.key));
     let targetEditor = target;
     if (targetChange?.operation === "insert") {
-      const key = `new:${crypto.randomUUID()}`;
+      const key = `new:${createUuid()}`;
       targetEditor = target.table === "projects"
         ? { table: "projects", key, operation: "insert", record: projectDraft() }
         : target.table === "project_changelogs"

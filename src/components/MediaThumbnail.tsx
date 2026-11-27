@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { Play, X } from "lucide-react";
+import { useCallback, useEffect, useRef } from "react";
+import { Play } from "lucide-react";
 import { createPortal } from "react-dom";
 
 const videoExtensions = [".mp4", ".webm", ".mov", ".m4v"];
@@ -23,6 +23,7 @@ export function MediaThumbnail({
   controls = false,
   centerPlayIcon = false,
   fit = "cover",
+  contentClassName = "",
   onPreviewClick,
 }: {
   url: string;
@@ -30,14 +31,15 @@ export function MediaThumbnail({
   controls?: boolean;
   centerPlayIcon?: boolean;
   fit?: "cover" | "contain";
+  contentClassName?: string;
   onPreviewClick?: () => void;
 }) {
   const frameClassName = fit === "contain"
     ? `relative flex max-w-full items-center justify-center overflow-hidden ${className}`
     : `relative overflow-hidden ${className}`;
   const mediaClassName = fit === "contain"
-    ? "block max-h-[min(75vh,720px)] max-w-full object-contain"
-    : "h-full w-full object-cover object-center";
+    ? `block max-h-[min(75vh,720px)] max-w-full object-contain ${contentClassName}`
+    : `h-full w-full object-cover object-center ${contentClassName}`;
 
   if (isVideoMedia(url)) {
     const videoPreview = (
@@ -117,41 +119,103 @@ export function MediaLightbox({
   alt: string;
   onClose: () => void;
 }) {
+  const historyEntryRef = useRef(false);
+  const closingRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  const closeLightbox = useCallback(() => {
+    if (historyEntryRef.current) {
+      if (closingRef.current) return;
+      closingRef.current = true;
+      window.history.back();
+      return;
+    }
+
+    onCloseRef.current();
+  }, []);
+
   useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state;
+      const isMediaLightboxState =
+        typeof state === "object" &&
+        state !== null &&
+        "neverlabsMediaLightbox" in state &&
+        state.neverlabsMediaLightbox === true;
+      const isMediaLightboxReturnState =
+        typeof state === "object" &&
+        state !== null &&
+        "neverlabsMediaLightboxReturn" in state &&
+        state.neverlabsMediaLightboxReturn === true;
+
+      if (
+        !historyEntryRef.current &&
+        !isMediaLightboxState &&
+        !isMediaLightboxReturnState
+      ) {
+        return;
+      }
+
+      historyEntryRef.current = isMediaLightboxState;
+      if (isMediaLightboxReturnState) {
+        const nextState = { ...state };
+        delete nextState.neverlabsMediaLightboxReturn;
+        window.history.replaceState(nextState, "", window.location.href);
+        closingRef.current = false;
+        onCloseRef.current();
+      }
+      event.stopImmediatePropagation();
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeLightbox();
+    };
+
+    window.addEventListener("popstate", handlePopState, true);
     document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+    if (!historyEntryRef.current) {
+      const currentState = window.history.state;
+      const currentHistoryState =
+        typeof currentState === "object" && currentState !== null
+          ? currentState
+          : {};
+      window.history.replaceState(
+        { ...currentHistoryState, neverlabsMediaLightboxReturn: true },
+        "",
+        window.location.href,
+      );
+      window.history.pushState(
+        { ...currentHistoryState, neverlabsMediaLightbox: true },
+        "",
+        window.location.href,
+      );
+      historyEntryRef.current = true;
+    }
+
+    return () => {
+      window.removeEventListener("popstate", handlePopState, true);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [closeLightbox]);
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4"
-      onClick={onClose}
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-0"
+      onClick={closeLightbox}
       role="presentation"
     >
       <section
         aria-label="Media preview"
         aria-modal="true"
-        className="relative flex max-h-[90vh] max-w-[90vw] items-center justify-center"
-        onClick={(event) => event.stopPropagation()}
+        className="relative flex h-full w-full items-center justify-center"
         role="dialog"
       >
-        <button
-          aria-label="Close media preview"
-          autoFocus
-          className="absolute -right-2 -top-2 z-10 rounded-full bg-white/15 p-2 text-white transition-colors hover:bg-white/25 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:right-2 sm:top-2"
-          onClick={onClose}
-          type="button"
-        >
-          <X size={22} />
-        </button>
         {isVideoMedia(url) ? (
           <video
             aria-label={alt || "Video preview"}
             autoPlay
-            className="max-h-[90vh] max-w-[90vw] object-contain"
+            className="max-h-full max-w-full object-contain"
+            onClick={(event) => event.stopPropagation()}
             controls
             controlsList="nofullscreen"
             playsInline
@@ -161,7 +225,8 @@ export function MediaLightbox({
         ) : (
           <img
             alt={alt}
-            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+            className="max-h-full max-w-full object-contain"
+            onClick={(event) => event.stopPropagation()}
             src={url}
           />
         )}

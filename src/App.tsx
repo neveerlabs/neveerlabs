@@ -138,12 +138,7 @@ type HomePageCopy = {
   heroNameFirst: string;
   heroNameLast: string;
   intro: string;
-  selectedWork: string;
-  allProjects: string;
-  work: { title: string; description: string; category: string }[];
   blog: string;
-  blogDescription: string;
-  blogEmptyState: string;
   openBlog: string;
   badge: {
     role: string;
@@ -165,33 +160,7 @@ const homeCopy: Record<Language, HomePageCopy> = {
     heroNameLast: "Al Farizi",
     intro:
       "I explore ideas and engineer software through Neverlabs. I build web and mobile applications alongside practical tools that turn useful ideas into reality.",
-    selectedWork: "Selected work",
-    allProjects: "All projects",
-    work: [
-      {
-        title: "Cheya App",
-        description: "A product experiment for thoughtful everyday interactions.",
-        category: "Product",
-      },
-      {
-        title: "e-Kitabku",
-        description: "A digital reading project shaped for the web.",
-        category: "Reading",
-      },
-      {
-        title: "Fuzzer",
-        description: "A developer utility exploring automated test workflows.",
-        category: "Developer tool",
-      },
-      {
-        title: "Sara",
-        description: "An interface experiment around clear digital interactions.",
-        category: "Experiment",
-      },
-    ],
     blog: "Blog",
-    blogDescription: "Notes on software, ideas, experiments, and technology.",
-    blogEmptyState: "No posts published yet.",
     openBlog: "Open blog",
     badge: {
       role: "Software & App Developer",
@@ -211,33 +180,7 @@ const homeCopy: Record<Language, HomePageCopy> = {
     heroNameLast: "Al Farizi",
     intro:
       "我通过 Neverlabs 探索想法并构建软件，专注于开发 Web 与移动应用程序以及实用的数字工具，把有价值的想法变成现实。",
-    selectedWork: "精选项目",
-    allProjects: "全部项目",
-    work: [
-      {
-        title: "Cheya App",
-        description: "探索日常数字体验的产品实验。",
-        category: "产品",
-      },
-      {
-        title: "e-Kitabku",
-        description: "围绕数字阅读打造的线上项目。",
-        category: "阅读",
-      },
-      {
-        title: "Fuzzer",
-        description: "探索自动化测试流程的开发工具。",
-        category: "开发工具",
-      },
-      {
-        title: "Sara",
-        description: "关注清晰数字交互的界面实验。",
-        category: "实验",
-      },
-    ],
     blog: "博客",
-    blogDescription: "记录软件、想法、实验与技术。",
-    blogEmptyState: "目前还没有发布文章。",
     openBlog: "前往博客",
     badge: {
       role: "软件与应用开发者",
@@ -711,11 +654,10 @@ function HomePage({
   onNavigate: PageNavigationHandler;
 }) {
   const text = homeCopy[language];
-  const projectsHref = getLocalizedPath(language, "projects");
   const blogHref = getLocalizedPath(language, "blog");
 
   return (
-    <div className="pb-16 md:pb-24">
+    <div className="pb-6 md:pb-8">
       <div className="home-hero-canvas relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] w-screen">
         <div className="relative z-10 mx-auto w-full max-w-[1260px] px-2 pt-0 pb-2 md:px-4">
           <section
@@ -758,68 +700,15 @@ function HomePage({
             </div>
           </section>
         </div>
-
         <TechMarquee language={language} />
       </div>
 
-      <div className="mx-auto w-full max-w-[980px] px-2 md:px-3">
-        <section
-          aria-labelledby="selected-work-title"
-          className="mt-12 pt-8 md:mt-16 md:pt-10"
-        >
-          <div className="mb-4 flex items-center justify-between gap-4">
-            <h2
-              className="text-xs font-medium uppercase tracking-[0.12em] text-[#9a9ba0]"
-              id="selected-work-title"
-            >
-              {text.selectedWork}
-            </h2>
+      <div className="home-content-frame">
+        <section className="mt-6 pt-4 md:mt-8 md:pt-5">
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-base font-medium text-[#22242b]">{text.blog}</h2>
             <a
-              className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-[#22242b] transition-colors hover:text-[#4774ed]"
-              href={projectsHref}
-              onClick={(event) => onNavigate(event, "projects")}
-            >
-              {text.allProjects}
-              <ArrowUpRight size={15} strokeWidth={1.7} />
-            </a>
-          </div>
-          <div className="border-t border-[#e6e5e3]">
-            {text.work.map((project, index) => (
-              <a
-                className="group grid w-full grid-cols-[28px_minmax(0,1fr)_auto] items-baseline gap-x-3 border-b border-[#e6e5e3] py-4 last:border-b-0 md:grid-cols-[40px_minmax(0,1.1fr)_minmax(0,1.7fr)_auto] md:gap-x-6"
-                href={projectsHref}
-                key={project.title}
-                onClick={(event) => onNavigate(event, "projects")}
-              >
-                <span className="row-start-1 text-xs font-medium text-[#4774ed]">
-                  {String(index + 1).padStart(2, "0")}
-                </span>
-                <h3 className="col-start-2 row-start-1 text-sm font-medium text-[#22242b] transition-colors group-hover:text-[#4774ed] md:text-base">
-                  {project.title}
-                </h3>
-                <span className="col-start-3 row-start-1 text-[10px] text-[#9a9ba0] md:col-start-4 md:text-xs">
-                  {project.category}
-                </span>
-                <p className="col-start-2 col-end-4 row-start-2 mt-1 truncate text-xs leading-relaxed text-[#76777c] md:col-start-3 md:col-end-4 md:row-start-1 md:mt-0 md:text-sm">
-                  {project.description}
-                </p>
-              </a>
-            ))}
-          </div>
-        </section>
-
-        <section className="mt-12 pt-8 md:mt-16 md:pt-10">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
-            <div className="min-w-0">
-              <p className="text-base leading-relaxed text-[#22242b]">
-                {text.blogDescription}
-              </p>
-              <p className="mt-2 text-sm text-[#76777c]">
-                {text.blogEmptyState}
-              </p>
-            </div>
-            <a
-              className="inline-flex shrink-0 items-center gap-1 self-end text-sm font-medium text-[#22242b] transition-colors hover:text-[#4774ed] sm:self-start"
+              className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-[#22242b]"
               href={blogHref}
               onClick={(event) => onNavigate(event, "blog")}
             >
@@ -837,35 +726,40 @@ function AboutPage({ language }: { language: Language }) {
   const text = aboutCopy[language];
 
   return (
-    <div className="mx-auto w-full max-w-[980px] px-2 pt-2 pb-16 md:px-3 md:pt-5 md:pb-24">
-      <section aria-labelledby="about-title" className="max-w-2xl">
+    <div className="about-page mx-auto w-full max-w-[980px] px-2 pt-2 pb-4 md:max-w-none md:px-0 md:pt-0 md:pb-8">
+      <section
+        aria-labelledby="about-title"
+        className="max-w-4xl px-2.5 md:px-6"
+      >
         <h1
           id="about-title"
           className="text-[28px] font-bold leading-[1.18] tracking-[-0.025em] text-[#22242b] md:text-[44px] md:leading-[1.12] md:tracking-[-0.03em]"
         >
           {text.headline}
         </h1>
-        {text.narrative.map((paragraph) => (
-          <p
-            className="mt-4 text-[15px] leading-[1.65] text-[#6d6e73] md:mt-5 md:text-[17px] md:leading-[1.68]"
-            key={paragraph}
-          >
-            {paragraph}
-          </p>
-        ))}
+        <div className="mt-4 space-y-4 md:mt-5 md:space-y-5">
+          {text.narrative.map((paragraph) => (
+            <p
+              className="text-[15px] leading-[1.65] text-[#6d6e73] md:text-[17px] md:leading-[1.68]"
+              key={paragraph}
+            >
+              {paragraph}
+            </p>
+          ))}
+        </div>
       </section>
 
       <section
         aria-label={language === "en" ? "Core principles" : "核心原则"}
-        className="mt-10 border-t border-[#e6e5e3] pt-8 md:mt-14 md:pt-9"
+        className="mt-8 border-t border-[#e6e5e3] px-2.5 pt-6 md:mt-14 md:px-6 md:pt-9"
       >
         <h2 className="sr-only">
           {language === "en" ? "Core principles" : "核心原则"}
         </h2>
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-3 md:gap-10">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:gap-10">
           {text.principles.map((principle) => (
             <article
-              className="border-b border-[#e6e5e3] pb-6 last:border-b-0 last:pb-0 md:border-b-0 md:pb-0"
+              className="md:border-b-0 md:pb-0"
               key={principle.title}
             >
               <h3 className="mb-2 text-lg font-semibold text-[#22242b]">
@@ -881,12 +775,12 @@ function AboutPage({ language }: { language: Language }) {
 
       <section
         aria-labelledby="focus-areas-title"
-        className="mt-10 border-t border-[#e6e5e3] pt-8 md:mt-16 md:grid md:grid-cols-[200px_1fr] md:gap-10 md:pt-10"
+        className="mt-8 border-t border-[#e6e5e3] px-2.5 pt-6 md:mt-8 md:grid md:grid-cols-[200px_1fr] md:gap-10 md:px-6 md:pt-6"
       >
         <div>
           <h2
             id="focus-areas-title"
-            className="mb-6 text-xs font-medium uppercase tracking-[0.12em] text-[#9a9ba0] md:mb-0"
+            className="mb-4 text-xs font-medium uppercase tracking-[0.12em] text-[#9a9ba0] md:mb-0"
           >
             {text.focusLabel}
           </h2>
@@ -894,7 +788,7 @@ function AboutPage({ language }: { language: Language }) {
         <div>
           {text.focusAreas.map((area) => (
             <div
-              className="border-b border-[#e6e5e3] py-4 first:pt-0 last:border-b-0 md:grid md:grid-cols-[220px_1fr] md:items-baseline md:gap-8 md:py-5"
+              className="py-2 first:pt-0 last:pb-0 md:grid md:grid-cols-[220px_1fr] md:items-baseline md:gap-8 md:border-b md:border-[#e6e5e3] md:py-5 md:first:pt-0 md:last:border-b-0 md:last:pb-5"
               key={area.title}
             >
               <h3 className="text-base font-medium text-[#22242b]">
@@ -1026,6 +920,8 @@ function PortfolioApp() {
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const lastSlideDirection = useRef<number | null>(null);
+  const routeRef = useRef({ language, page: currentPage, projectName });
+  const hasLoadedProjects = useRef(false);
   const text = copy[language];
   const isChinese = language === "zh";
 
@@ -1104,6 +1000,12 @@ function PortfolioApp() {
       return;
     }
 
+    if (currentPage === "projects" && hasLoadedProjects.current) {
+      setProjectsLoading(false);
+      setProjectsError(null);
+      return;
+    }
+
     const controller = new AbortController();
     const endpoint =
       currentPage === "project-detail"
@@ -1128,6 +1030,7 @@ function PortfolioApp() {
           setSelectedProject(data as Project);
         } else {
           setProjects(data as Project[]);
+          hasLoadedProjects.current = true;
         }
       })
       .catch((error: unknown) => {
@@ -1143,33 +1046,130 @@ function PortfolioApp() {
   }, [currentPage, projectName]);
 
   useEffect(() => {
-    const syncLanguageFromUrl = () => {
-      const pathLanguage = getLanguageFromPathname(window.location.pathname);
-      const nextLanguage = pathLanguage ?? "en";
-      const nextPage = getPageFromPathname(window.location.pathname);
+    const initialLanguage =
+      getLanguageFromPathname(window.location.pathname) ?? language;
+    const initialPage = getPageFromPathname(window.location.pathname);
+    const initialProjectName = getProjectNameFromPathname(
+      window.location.pathname,
+    );
+    const initialPath = getLocalizedPath(
+      initialLanguage,
+      initialPage,
+      initialProjectName,
+    );
+    const initialUrl = `${initialPath}${window.location.search}${window.location.hash}`;
 
-      setLanguage(nextLanguage);
-      setCurrentPage(nextPage);
-      setProjectName(getProjectNameFromPathname(window.location.pathname));
+    if (window.location.pathname !== initialPath) {
+      window.history.replaceState(null, "", initialUrl);
+    }
+
+    routeRef.current = {
+      language: initialLanguage,
+      page: initialPage,
+      projectName: initialProjectName,
+    };
+
+    const historyState = window.history.state;
+    const hasAppHistoryEntry =
+      typeof historyState === "object" &&
+      historyState !== null &&
+      "neverlabsRoute" in historyState;
+
+    if (initialPage !== "home" && !hasAppHistoryEntry) {
+      const fallbackPage = initialPage === "project-detail" ? "projects" : "home";
+      const fallbackPath = getLocalizedPath(initialLanguage, fallbackPage);
+      window.history.replaceState(
+        { neverlabsRoute: fallbackPage },
+        "",
+        `${fallbackPath}${window.location.search}`,
+      );
+      window.history.pushState(
+        { neverlabsRoute: initialPage },
+        "",
+        initialUrl,
+      );
+    }
+
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state;
+      const isKeywordPickerHistoryState =
+        typeof state === "object" &&
+        state !== null &&
+        (("neverlabsKeywordPicker" in state &&
+          state.neverlabsKeywordPicker === true) ||
+          ("neverlabsKeywordPickerReturn" in state &&
+            state.neverlabsKeywordPickerReturn === true));
+      const isMediaLightboxState =
+        typeof state === "object" &&
+        state !== null &&
+        "neverlabsMediaLightbox" in state &&
+        state.neverlabsMediaLightbox === true;
+      const isMediaLightboxReturnState =
+        typeof state === "object" &&
+        state !== null &&
+        "neverlabsMediaLightboxReturn" in state &&
+        state.neverlabsMediaLightboxReturn === true;
+      if (isMediaLightboxReturnState) {
+        const nextState = { ...state };
+        delete nextState.neverlabsMediaLightboxReturn;
+        window.history.replaceState(nextState, "", window.location.href);
+      }
+      if (
+        isKeywordPickerHistoryState ||
+        isMediaLightboxState ||
+        isMediaLightboxReturnState
+      ) {
+        return;
+      }
+
+      const currentRoute = routeRef.current;
+      const pathLanguage = getLanguageFromPathname(window.location.pathname);
+      const nextLanguage = pathLanguage ?? currentRoute.language;
+      let nextPage = getPageFromPathname(window.location.pathname);
+      let nextProjectName = getProjectNameFromPathname(
+        window.location.pathname,
+      );
+
+      if (currentRoute.page === "project-detail") {
+        nextPage = "projects";
+        nextProjectName = null;
+      } else if (currentRoute.page !== "home") {
+        nextPage = "home";
+        nextProjectName = null;
+      }
 
       const canonicalPath = getLocalizedPath(
         nextLanguage,
         nextPage,
-        getProjectNameFromPathname(window.location.pathname),
+        nextProjectName,
       );
       if (window.location.pathname !== canonicalPath) {
         window.history.replaceState(
-          null,
+          { neverlabsRoute: nextPage },
           "",
           `${canonicalPath}${window.location.search}${window.location.hash}`,
         );
       }
 
+      routeRef.current = {
+        language: nextLanguage,
+        page: nextPage,
+        projectName: nextProjectName,
+      };
+      flushSync(() => {
+        setLanguage(nextLanguage);
+        setCurrentPage(nextPage);
+        setProjectName(nextProjectName);
+        setIsHeaderVisible(true);
+      });
+
+      if (currentRoute.page !== "project-detail" && nextPage === "home") {
+        window.scrollTo(0, 0);
+      }
     };
 
-    syncLanguageFromUrl();
-    window.addEventListener("popstate", syncLanguageFromUrl);
-    return () => window.removeEventListener("popstate", syncLanguageFromUrl);
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   useEffect(() => {
@@ -1214,7 +1214,12 @@ function PortfolioApp() {
         nextPage,
         nextProjectName,
       )}${window.location.search}`;
-      window.history.pushState(null, "", path);
+      window.history.pushState({ neverlabsRoute: nextPage }, "", path);
+      routeRef.current = {
+        language: nextLanguage,
+        page: nextPage,
+        projectName: nextProjectName,
+      };
 
       flushSync(() => {
         setLanguage(nextLanguage);
@@ -1287,10 +1292,18 @@ function PortfolioApp() {
   const aboutUrl = getLocalizedPath(language, "about");
   const projectsUrl = getLocalizedPath(language, "projects");
   const blogUrl = getLocalizedPath(language, "blog");
+  const pageClassName = [
+    "page",
+    isChinese && "page-zh",
+    currentPage === "projects" && "page-projects",
+    currentPage === "about" && "page-about",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <main
-      className={isChinese ? "page page-zh" : "page"}
+      className={pageClassName}
       lang={isChinese ? "zh-CN" : "en"}
     >
       <header
