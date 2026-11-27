@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import { basename, dirname, extname } from "node:path";
 import { attachContributorAssignments } from "./contributor-data.js";
+import { trackDatabaseActivity } from "./database-activity.js";
 
 interface AdminRequest extends AsyncIterable<Uint8Array> {
   method?: string;
@@ -236,6 +237,23 @@ function validateStoragePath(path: unknown): path is string {
   );
 }
 
+function encodeStorageObjectPath(path: string): string {
+  return path.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+}
+
+function getPublicStorageUrl(
+  supabase: ReturnType<typeof getSupabase>,
+  path: string,
+): string {
+  const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
+  const sdkPath = encodeURI(path);
+  const pathIndex = publicUrl.lastIndexOf(sdkPath);
+  if (pathIndex < 0) {
+    throw new Error("Unable to safely construct the public media URL.");
+  }
+  return `${publicUrl.slice(0, pathIndex)}${encodeStorageObjectPath(path)}${publicUrl.slice(pathIndex + sdkPath.length)}`;
+}
+
 function validateMediaObjectPath(path: unknown): path is string {
   return (
     typeof path === "string" &&
@@ -338,7 +356,9 @@ async function getRowsWithContributors(
 
 function getFileName(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 255) return null;
-  const name = basename(value).replace(/[\\/]/g, "-").normalize("NFKC");
+  const name = basename(value)
+    .normalize("NFKC")
+    .replace(/[^A-Za-z0-9._-]+/g, "-");
   const extension = extname(name).toLowerCase();
   if (!uploadTypes[extension]) return null;
   return name;
@@ -447,6 +467,7 @@ export async function handleAdminRequest(
 
   try {
     const supabase = getSupabase(env);
+    await trackDatabaseActivity(supabase);
 
     if (method === "GET" && action === "/projects") {
       respond(response, 200, await getRowsWithContributors(supabase, "projects"));
@@ -494,7 +515,7 @@ export async function handleAdminRequest(
           contentType: item.metadata?.mimetype ?? null,
           publicUrl: isFolder
             ? null
-            : supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl,
+            : getPublicStorageUrl(supabase, path),
         };
       });
       respond(response, 200, {
@@ -519,9 +540,7 @@ export async function handleAdminRequest(
 
       const year = new Date().getUTCFullYear();
       const objectPath = `admin/${year}/${randomUUID()}-${fileName}`;
-      const publicUrl = supabase.storage
-        .from(storageBucket)
-        .getPublicUrl(objectPath).data.publicUrl;
+      const publicUrl = getPublicStorageUrl(supabase, objectPath);
       respond(response, 200, {
         path: objectPath,
         publicUrl,
@@ -553,9 +572,7 @@ export async function handleAdminRequest(
         .from(storageBucket)
         .list(folder, { limit: 5, search: fileName });
       if (listError) throw listError;
-      const publicUrl = supabase.storage
-        .from(storageBucket)
-        .getPublicUrl(objectPath).data.publicUrl;
+      const publicUrl = getPublicStorageUrl(supabase, objectPath);
       if (existingFiles?.some((file) => file.name === fileName && file.id !== null)) {
         respond(response, 200, {
           alreadyUploaded: true,
@@ -567,7 +584,7 @@ export async function handleAdminRequest(
 
       const { data, error } = await supabase.storage
         .from(storageBucket)
-        .createSignedUploadUrl(objectPath, { upsert: false });
+        .createSignedUploadUrl(encodeStorageObjectPath(objectPath), { upsert: false });
       if (error) throw error;
       respond(response, 200, {
         signedUrl: data.signedUrl,

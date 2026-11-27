@@ -9,7 +9,6 @@ import {
 import {
   MediaLightbox,
   MediaThumbnail,
-  isImageMedia,
 } from "../components/MediaThumbnail";
 import { MarkdownContent } from "../components/MarkdownContent";
 import type {
@@ -177,11 +176,11 @@ function MediaGallery({ project, language }: { project: Project; language: Langu
   return (
     <>
       <div className="w-full">
-        <div className="aspect-video overflow-hidden rounded-2xl border border-[#e6e5e3] bg-[#f3f2ef]">
+        <div className="flex w-full justify-center">
           <MediaThumbnail
-            className="h-full w-full object-cover"
-            controls={!isImageMedia(displayedMedia)}
-            onImageClick={isImageMedia(displayedMedia) ? () => setLightboxUrl(displayedMedia) : undefined}
+            className="rounded-2xl border border-[#e6e5e3] bg-[#f3f2ef]"
+            fit="contain"
+            onPreviewClick={() => setLightboxUrl(displayedMedia)}
             url={displayedMedia}
           />
         </div>
@@ -195,7 +194,7 @@ function MediaGallery({ project, language }: { project: Project; language: Langu
                 <button
                   aria-label={`${detailText[language].selectMedia} ${index + 1}`}
                   aria-pressed={displayedMedia === url}
-                  className={`h-16 w-24 shrink-0 overflow-hidden rounded-lg border-2 transition ${
+                  className={`h-[60px] w-24 shrink-0 overflow-hidden rounded-lg border-2 transition ${
                     displayedMedia === url
                       ? "border-[#1a1918]"
                       : "border-transparent opacity-75 hover:border-[#b8b7b4] hover:opacity-100"
@@ -206,7 +205,11 @@ function MediaGallery({ project, language }: { project: Project; language: Langu
                   onMouseEnter={() => setActiveMedia(url)}
                   type="button"
                 >
-                  <MediaThumbnail className="h-full w-full object-cover" url={url} />
+                  <MediaThumbnail
+                    centerPlayIcon
+                    className="h-full w-full object-cover"
+                    url={url}
+                  />
                 </button>
               ))}
             </div>

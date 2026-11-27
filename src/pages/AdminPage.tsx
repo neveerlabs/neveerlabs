@@ -676,9 +676,11 @@ function ContributorPicker({
 function MediaPreview({
   value,
   pendingUploads,
+  contentType,
 }: {
   value: string;
   pendingUploads: Map<string, PendingUpload>;
+  contentType?: string | null;
 }) {
   const pending = isPendingReference(value) ? pendingUploads.get(value) : undefined;
   const url = mediaUrl(value, pendingUploads);
@@ -701,7 +703,7 @@ function MediaPreview({
   }
   const isVideo = pending
     ? pending.contentType.startsWith("video/")
-    : isVideoMedia(source);
+    : contentType?.startsWith("video/") || isVideoMedia(source);
   return isVideo
     ? <video controls preload="metadata" src={source} />
     : <img alt="" loading="lazy" src={source} />;
@@ -1472,7 +1474,11 @@ function MediaLibraryDetail({
         aria-label={`Preview of ${asset.name}`}
         className="admin-media-library-preview"
       >
-        <MediaPreview pendingUploads={pendingUploads} value={asset.publicUrl} />
+        <MediaPreview
+          contentType={asset.contentType}
+          pendingUploads={pendingUploads}
+          value={asset.publicUrl}
+        />
       </section>
       <section className="admin-media-library-usage">
         <h3>Used by projects</h3>
@@ -1808,10 +1814,13 @@ export function AdminPage() {
     .map((row) => row.record as ProjectContributor)
     .filter((contributor) => contributor.id);
   const normalizedSearch = search.trim().toLocaleLowerCase();
-  const mediaTreeRows = (mediaAssets ?? []).filter((item) =>
+  const availableMediaAssets = (mediaAssets ?? []).filter(
+    (item) => !stagedMediaDeletions.has(item.path),
+  );
+  const mediaTreeRows = availableMediaAssets.filter((item) =>
     !normalizedSearch || `${item.name} ${item.path}`.toLocaleLowerCase().includes(normalizedSearch),
   );
-  const selectedMedia = mediaAssets?.find((item) => item.path === selectedMediaPath) ?? null;
+  const selectedMedia = availableMediaAssets.find((item) => item.path === selectedMediaPath) ?? null;
   const selectedMediaProjects = selectedMedia
     ? availableProjects.filter((project) =>
         projectUsesStorageMedia(project, selectedMedia.path, availableChangelogs),
@@ -1872,6 +1881,8 @@ export function AdminPage() {
         : "contributors";
     if (editor?.table === nextEditor.table && editor.key === nextEditor.key) {
       setSection(nextSection);
+      setSelectedKey(nextEditor.key);
+      setEditor(nextEditor);
       return;
     }
     setSection(nextSection);
@@ -1896,6 +1907,8 @@ export function AdminPage() {
         : nextEditor.table === "project_changelogs"
           ? "changelogs"
           : "contributors");
+      setSelectedKey(nextEditor.key);
+      setEditor(nextEditor);
       return;
     }
     if (actionBusy) return;
@@ -2036,6 +2049,10 @@ export function AdminPage() {
     const next = new Map(staged);
     stageRecordChange(next, table, key, operation, record);
     setStaged(next);
+    setEditor((current) => {
+      if (!current || current.table !== table || current.key !== key) return current;
+      return { ...current, record } as EditorState;
+    });
     setSelectedKey(key);
     setError("");
     setNotice("");
@@ -2094,6 +2111,9 @@ export function AdminPage() {
     }
     setStaged(next);
     setStagedMediaDeletions((current) => new Set(current).add(mediaDeleteTarget.path));
+    if (selectedMediaPath === mediaDeleteTarget.path) {
+      setSelectedMediaPath(null);
+    }
     setMediaDeleteTarget(null);
     setError("");
     setNotice(
@@ -2262,7 +2282,10 @@ export function AdminPage() {
             body: upload.file,
           });
           if (!response.ok) {
-            throw new Error(`Storage upload failed (${response.status}) for ${upload.file.name}.`);
+            const details = (await response.text()).trim().slice(0, 500);
+            throw new Error(
+              `Storage upload failed (${response.status}) for ${upload.file.name}${details ? `: ${details}` : "."}`,
+            );
           }
           uploadedPaths.add(upload.path);
         } catch (caught) {
@@ -2675,7 +2698,7 @@ export function AdminPage() {
                 >
                   <FileImage size={15} />
                   <span>Media</span>
-                  {authenticated && mediaAssets && <small>{mediaAssets.length}</small>}
+                  {authenticated && mediaAssets && <small>{availableMediaAssets.length}</small>}
                 </button>
                 <button
                   aria-label="Refresh media"

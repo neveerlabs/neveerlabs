@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { Project } from "../src/types/projects.js";
 import { attachContributorAssignments } from "../src/server/contributor-data.js";
+import { trackDatabaseActivity } from "../src/server/database-activity.js";
 
 interface ApiRequest {
   method?: string;
@@ -44,6 +45,7 @@ export async function handleProjectsRequest(
     const supabase = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
+    await trackDatabaseActivity(supabase);
     const requestUrl = new URL(
       request.url ?? "/api/projects",
       `https://${request.headers.host ?? "localhost"}`,

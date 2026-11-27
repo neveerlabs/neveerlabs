@@ -4,9 +4,11 @@ Dokumen ini menjelaskan cara menyiapkan Supabase, mengisi proyek melalui Table E
 
 ## 1. Siapkan database
 
-Untuk **project Supabase baru**, jalankan `schema.sql`, lalu `commit_manager.sql` di SQL Editor. `schema.sql` menyiapkan tabel `projects` dan `project_changelogs`, bucket publik `project-media`, serta aturan akses dan pemicu penghapusan media. Ekstensi `pg_net` dan schema `vault` juga disiapkan. `commit_manager.sql` memasang fungsi commit atomik yang hanya dapat dipanggil dengan role `service_role`.
+Untuk **project Supabase baru**, jalankan `schema.sql`, lalu `commit_manager.sql` di SQL Editor. `schema.sql` menyiapkan tabel `projects` dan `project_changelogs`, bucket publik `project-media`, pemicu penghapusan media, dan tabel privat `cache` untuk pencatatan aktivitas serta keepalive database. File media bisa dibaca lewat URL publik, tetapi tidak ada policy yang mengizinkan client publik me-list isi bucket. Ekstensi `pg_net` dan schema `vault` juga disiapkan. `commit_manager.sql` memasang fungsi commit atomik yang hanya dapat dipanggil dengan role `service_role`.
 
-Untuk **database yang sudah digunakan**, jangan jalankan file setup ini secara otomatis. Jalankan migrasi yang belum diterapkan di SQL Editor sesuai urutan nama file: `migrations/20261126210613_prevent_changelog_project_reassignment.sql`, lalu `migrations/20261126214620_changelog_release_values.sql`. Migrasi status release mengubah nilai lama `stable` menjadi `latest` tanpa menghapus baris changelog.
+Untuk **database yang sudah digunakan**, jangan jalankan file setup ini secara otomatis. Jalankan migrasi yang belum diterapkan di SQL Editor sesuai urutan nama file: `migrations/20261126190000_normalize_contributors.sql`, `migrations/20261127130000_remove_public_project_media_listing_policy.sql`, lalu `migrations/20261127142000_add_database_keepalive.sql`. Migrasi penghapusan policy menutup listing publik bucket `project-media`; status bucket dan akses file lewat URL publik tidak berubah.
+
+Keepalive mencatat perubahan pada tabel project/contributor melalui trigger dan pembacaan melalui API server. Vercel Cron memeriksa status harian; setelah 5 hari tanpa aktivitas nyata, fungsi membuat lalu langsung menghapus baris pulse di `public.cache`, sambil menyimpan waktu keepalive terakhir. Atur `CRON_SECRET` di environment **Production** Vercel agar endpoint terjadwal dapat diautentikasi. Ini adalah mekanisme best-effort, bukan jaminan dari Supabase bahwa project tidak akan dipause.
 
 ## 2. Tambahkan proyek melalui Table Editor
 
@@ -101,6 +103,7 @@ Respons `[]` berarti koneksi API berhasil, tetapi belum ada proyek publik. Respo
 2. Tambahkan `SUPABASE_URL` dan `SUPABASE_SERVICE_ROLE_KEY` dengan nilai yang sama seperti di lokal. Pilih lingkungan **Preview** dan **Production**.
 3. Simpan, lalu deploy ulang agar fungsi API menggunakan variabel terbaru.
 4. Buka `https://<domain-situs>/api/projects` untuk memeriksa respons. Setelah proyek publik tersedia, buka halaman `/en/projects` atau `/zh/projects`.
+5. Untuk keepalive terjadwal, tambahkan `CRON_SECRET` sebagai environment variable **Production**. Gunakan nilai acak panjang, misalnya hasil `openssl rand -base64 32`. Vercel Cron memanggil `/api/database-keepalive` setiap hari pukul 00:00 UTC dan mengirim rahasia tersebut sebagai Bearer token.
 
 Jangan pernah memakai service-role key pada kode frontend atau variabel `VITE_*`.
 

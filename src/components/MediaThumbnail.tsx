@@ -5,8 +5,12 @@ import { createPortal } from "react-dom";
 const videoExtensions = [".mp4", ".webm", ".mov", ".m4v"];
 
 export function isVideoMedia(url: string): boolean {
-  const path = url.split(/[?#]/, 1)[0].toLowerCase();
-  return videoExtensions.some((extension) => path.endsWith(extension));
+  const [path, ...fragments] = url.toLowerCase().split("#");
+  const pathWithoutQuery = path.split("?", 1)[0];
+  return videoExtensions.some((extension) =>
+    pathWithoutQuery.endsWith(extension) ||
+    fragments.some((fragment) => fragment.split("?", 1)[0].endsWith(extension)),
+  );
 }
 
 export function isImageMedia(url: string): boolean {
@@ -17,19 +21,30 @@ export function MediaThumbnail({
   url,
   className = "",
   controls = false,
-  onImageClick,
+  centerPlayIcon = false,
+  fit = "cover",
+  onPreviewClick,
 }: {
   url: string;
   className?: string;
   controls?: boolean;
-  onImageClick?: () => void;
+  centerPlayIcon?: boolean;
+  fit?: "cover" | "contain";
+  onPreviewClick?: () => void;
 }) {
+  const frameClassName = fit === "contain"
+    ? `relative flex max-w-full items-center justify-center overflow-hidden ${className}`
+    : `relative overflow-hidden ${className}`;
+  const mediaClassName = fit === "contain"
+    ? "block max-h-[min(75vh,720px)] max-w-full object-contain"
+    : "h-full w-full object-cover object-center";
+
   if (isVideoMedia(url)) {
-    return (
-      <div className={`relative overflow-hidden ${className}`}>
+    const videoPreview = (
+      <>
         <video
           aria-label="Project video"
-          className="h-full w-full object-cover"
+          className={mediaClassName}
           controls={controls}
           muted={!controls}
           playsInline
@@ -39,23 +54,57 @@ export function MediaThumbnail({
         {!controls && (
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute right-3 top-3 flex size-8 items-center justify-center rounded-full border border-white/50 bg-black/45 text-white backdrop-blur-sm"
+            className={
+              onPreviewClick
+                ? "pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10"
+                : centerPlayIcon
+                  ? "pointer-events-none absolute inset-0 flex items-center justify-center bg-black/10"
+                  : "pointer-events-none absolute right-3 top-3 flex size-8 items-center justify-center rounded-full border border-white/50 bg-black/45 text-white backdrop-blur-sm"
+            }
           >
-            <Play size={14} fill="currentColor" />
+            <span
+              className={
+                onPreviewClick
+                  ? "flex size-11 items-center justify-center rounded-full border border-white/60 bg-black/50 text-white shadow-lg backdrop-blur-sm"
+                  : centerPlayIcon
+                    ? "flex size-7 items-center justify-center rounded-full border border-white/60 bg-black/50 text-white shadow-lg backdrop-blur-sm"
+                    : ""
+              }
+            >
+              <Play fill="currentColor" size={onPreviewClick ? 18 : 14} />
+            </span>
           </span>
         )}
-      </div>
+      </>
     );
+    if (onPreviewClick && !controls) {
+      return (
+        <button
+          aria-label="Preview project video"
+          className={`${frameClassName} cursor-zoom-in bg-transparent p-0 text-left`}
+          onClick={onPreviewClick}
+          type="button"
+        >
+          {videoPreview}
+        </button>
+      );
+    }
+    return <div className={frameClassName}>{videoPreview}</div>;
   }
 
-  return (
+  const image = (
     <img
       alt="Project preview"
-      className={`h-full w-full object-cover ${onImageClick ? "cursor-zoom-in" : ""} ${className}`}
+      className={`${mediaClassName} ${onPreviewClick ? "cursor-zoom-in" : ""} ${fit === "cover" ? className : ""}`}
       loading="lazy"
-      onClick={onImageClick}
+      onClick={onPreviewClick}
       src={url}
     />
+  );
+  return fit === "contain" ? (
+    <div className={frameClassName}>{image}</div>
+  ) : (
+    image
   );
 }
 
@@ -104,6 +153,7 @@ export function MediaLightbox({
             autoPlay
             className="max-h-[90vh] max-w-[90vw] object-contain"
             controls
+            controlsList="nofullscreen"
             playsInline
             preload="metadata"
             src={url}

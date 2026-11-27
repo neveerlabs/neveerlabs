@@ -8,7 +8,7 @@ import {
   X,
 } from "lucide-react";
 import type { Language, Project, ProjectPlatform } from "../types/projects";
-import { MediaThumbnail } from "../components/MediaThumbnail";
+import { isVideoMedia, MediaThumbnail } from "../components/MediaThumbnail";
 
 const platforms: Array<ProjectPlatform | "all"> = [
   "all",
@@ -112,6 +112,8 @@ function ProjectCard({
   const href = `/${language}/projects/${encodeURIComponent(project.name)}`;
   const description = projectDescription(project, language);
   const descriptionPreview = plainDescriptionPreview(description, project.name);
+  const hasVideoPrimaryMedia =
+    Boolean(project.primary_media) && isVideoMedia(project.primary_media ?? "");
   const tags = [
     ...(project.platform ? [{ kind: "platform" as const, label: platformLabel(project.platform, language) }] : []),
     ...(project.keyword ?? []).slice(0, 2).map((label) => ({ kind: "keyword" as const, label })),
@@ -120,10 +122,11 @@ function ProjectCard({
   return (
     <article className="group relative isolate aspect-[4/3] overflow-hidden rounded-[20px] border border-[#e6e5e3] bg-[#f3f2ef] shadow-[0_8px_24px_rgba(26,25,24,0.07)] lg:rounded-2xl lg:shadow-[0_6px_18px_rgba(26,25,24,0.06)]">
       {project.primary_media ? (
-        <MediaThumbnail
-          className="absolute inset-0 transition-transform duration-500 group-hover:scale-[1.03]"
-          url={project.primary_media}
-        />
+        <div
+          className={`absolute inset-0 ${hasVideoPrimaryMedia ? "" : "transition-transform duration-500 group-hover:scale-[1.03]"}`}
+        >
+          <MediaThumbnail className="h-full w-full" url={project.primary_media} />
+        </div>
       ) : (
         <div
           aria-hidden="true"
