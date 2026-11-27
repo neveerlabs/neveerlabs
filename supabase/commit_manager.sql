@@ -11,7 +11,6 @@ declare
   record_data jsonb;
   target_id uuid;
   target_project_id uuid;
-  contributor_id uuid;
   description_value jsonb;
   media_value jsonb;
   framework_value text[];
@@ -286,7 +285,7 @@ begin
       from jsonb_array_elements_text(
         coalesce(nullif(record_data -> 'contributors', 'null'::jsonb), '[]'::jsonb)
       ) with ordinality as item(value, ordinality)
-      on conflict (project_id, contributor_id)
+      on conflict on constraint project_contributors_pkey
       do update set position = excluded.position;
     else
       target_project_id := nullif(record_data ->> 'project_id', '')::uuid;
@@ -347,7 +346,7 @@ begin
       from jsonb_array_elements_text(
         coalesce(nullif(record_data -> 'contributors', 'null'::jsonb), '[]'::jsonb)
       ) with ordinality as item(value, ordinality)
-      on conflict (changelog_id, contributor_id)
+      on conflict on constraint changelog_contributors_pkey
       do update set position = excluded.position;
     end if;
 
